@@ -92,6 +92,8 @@ Project documents:
 | `doc/coding-standard.md` | The SystemVerilog subset |
 | `doc/manual-contradictions.md` | Where the manual disagrees with itself, and the reading chosen |
 | `doc/size-and-speed.md` | Utilisation and Fmax, milestone by milestone |
+| `doc/bus-timing.md` | How the BIU meets the AC specifications, and the stale guard |
+| `doc/divergences.md` | Deliberate, protocol-permitted differences from the MC68881 |
 | `doc/model.md` | The Python reference models, how they are checked, and every choice they make where the manual is silent |
 
 ## Building and checking
@@ -99,7 +101,8 @@ Project documents:
 ```sh
 make lint     # every rtl module under iverilog, Verilator and yosys
 make audit    # prove no register initialises outside reset
-make check    # the gate: lint, audit, model-test
+make check    # the gate: lint, audit, model-test, sim
+make sim      # the directed testbenches in sim/tb
 make model-test      # the reference models' unit tests (doc/model.md)
 make testfloat       # the arithmetic model against TestFloat (make oracles builds it)
 make synth    # Vivado out-of-context synthesis, xc7a35t

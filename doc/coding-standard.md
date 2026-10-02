@@ -205,6 +205,7 @@ A function whose result depends only on its arguments is still fine anywhere.
 | iverilog | adjacent string literals do not concatenate (`"a" "b"` is a syntax error) | write one string |
 | Verilator | `-Wall` flags every unused package parameter | a `.vlt` waiver with a reason |
 | yosys | no `import` in any form | fully-scoped references |
+| iverilog 12 | an `always_comb` if/else-if chain assigning a two-bit value from single-bit selects of a register (`rd68884_biu`'s DSACK encoding) crashes code generation: `ivl_nexus_ptrs: Assertion 'net' failed`, no file or line. iverilog 13 accepts it *(measured in RD68884)* | write it as a continuous assignment with `?:`; to find such a line, delete one source line at a time and recompile |
 | Vivado | needs the package file read before its users | the file list is dependency-ordered, packages first |
 | Vivado | a signal used before its declaration is only `[Synth 8-6901]`, an *info* | `synth.tcl` and `impl.tcl` promote it to an error; Questa rejects the same thing natively |
 | Vivado | the ROM mapping in its own synthesis report is **preliminary**, and timing optimisation may reverse it afterwards with no message — the report still said Block RAM, the netlist had none, and the microcode store came back as 1900 extra LUTs | say which memory and stop it being a choice: `(* rom_style = "block" *)` on the store's output register |

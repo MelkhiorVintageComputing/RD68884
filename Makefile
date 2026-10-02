@@ -37,6 +37,7 @@ PKGS   := rtl/rd68884_pkg.sv
 GENPKG := $(wildcard rtl/gen/*_pkg.sv)
 GENSRC := $(filter-out $(GENPKG),$(wildcard rtl/gen/*.sv))
 SRCS   := rtl/rd68884_sync.sv \
+          rtl/rd68884_biu.sv \
           rtl/rd68884_top.sv
 
 RTL := $(PKGS) $(GENPKG) $(GENSRC) $(SRCS)
@@ -46,7 +47,7 @@ IVFLAGS := -g2012 -Wall -Wno-timescale
 
 .PHONY: all help dirs lint lint-source lint-iverilog lint-verilator lint-yosys \
         lint-quartus lint-questa synth impl quartus audit check print-rtl clean \
-        oracles model-test testfloat testfloat-full
+        oracles model-test testfloat testfloat-full sim
 
 all: lint
 
@@ -58,6 +59,7 @@ help:
 	@echo "  make lint         elaborate every rtl module under iverilog, Verilator and yosys"
 	@echo "  make audit        prove no register initialises outside reset"
 	@echo "  make model-test   the reference models' own tests (tools/model/tests)"
+	@echo "  make sim          the directed testbenches in sim/tb (iverilog)"
 	@echo
 	@echo "Oracles:"
 	@echo "  make oracles      build SoftFloat and TestFloat into $(BUILD)/oracles"
@@ -163,9 +165,32 @@ testfloat-full: oracles
 	@set -o pipefail; $(PYENV) python3 tools/model/check_testfloat.py | grep -v ': ok$$'
 
 # ---------------------------------------------------------------------------
+# Directed testbenches -- M3
+#
+# Each runs to completion and prints PASS or FAIL. The loop fails on a FAIL and
+# ALSO on a missing PASS: a testbench that stopped early without saying so has
+# not passed (the RD68021 rule).
+# ---------------------------------------------------------------------------
+TBS := $(patsubst sim/tb/%.sv,%,$(wildcard sim/tb/*_tb.sv))
+
+sim: dirs
+	@ok=1; for tb in $(TBS); do \
+	  iverilog $(IVFLAGS) -I sim/tb -o $(BUILD)/$$tb.vvp -s $$tb $(RTL) sim/tb/$$tb.sv \
+	    > $(BUILD)/$$tb.clog 2>&1 || { grep -v $(NOTES) $(BUILD)/$$tb.clog; ok=0; continue; }; \
+	  vvp $(BUILD)/$$tb.vvp > $(BUILD)/$$tb.log 2>&1; \
+	  if grep -q '^FAIL' $(BUILD)/$$tb.log; then \
+	    grep '^FAIL' $(BUILD)/$$tb.log | head -20; ok=0; \
+	  elif ! grep -q '^PASS' $(BUILD)/$$tb.log; then \
+	    echo "FAIL: $$tb reported no PASS"; tail -20 $(BUILD)/$$tb.log; ok=0; \
+	  else \
+	    echo "  $$(grep -E '^PASS' $(BUILD)/$$tb.log | head -1)"; \
+	  fi; \
+	done; test $$ok -eq 1 && echo "PASS: sim"
+
+# ---------------------------------------------------------------------------
 # The gate
 # ---------------------------------------------------------------------------
-check: lint audit model-test
+check: lint audit model-test sim
 	@echo "PASS: check"
 
 # ---------------------------------------------------------------------------

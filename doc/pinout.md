@@ -36,14 +36,14 @@ The ports of `rd68884_top` are the MC68881's pins (FPU section 9, table 9-5), wi
 - On a 32-bit port, a 16-bit CIR is always on D31–D16, acknowledged as a 16-bit port (table 9-3).
 
 **DSACK** (FPU 9.8):
-- The lines are actively driven high after AS or DS rises, then floated.
-- The board needs pull-ups.
-- `dsack_n_o` = `2'b11` with `dsack_oe` = 1 is the "actively negated" phase.
+- The MC68881 actively drives the lines high after AS or DS rises, then floats them. RD68884 floats them at once (doc/divergences.md).
+- The board needs pull-ups, as for the original.
+- `dsack_oe` is high only while an access is being acknowledged.
 
 **SENSE** (FPU 9.11) is a wire to ground on the die. It belongs to the board, not the core.
 
 **The clock.**
 - The MC68881's bus is asynchronous (FPU 10.4), so the core clock needs no relation to the main processor's.
-- The core clock does have to be fast enough to see the shortest strobe-negated gap: specification 13, 40 ns at 16.67 MHz. In practice that is a board PLL at two to three times the bus clock.
-- `doc/architecture.md`, "Clocking", gives the arithmetic.
+- Any core clock works. A slower one only adds wait states to CIR accesses (doc/bus-timing.md). The datapath is constrained at 50 MHz, from a board PLL.
+- `doc/architecture.md`, "Clocking", explains why.
 - The MC68881's CLK pin is the PLL's reference and nothing else.

@@ -8,5 +8,6 @@ Size is the project's first goal (CLAUDE.md), so every milestone records what it
 | Milestone | Run | LUT | FF | DSP | RAMB36 | Fmax | Notes |
 |---|---|--:|--:|--:|--:|--:|---|
 | M1 skeleton | synth | 0 | 0 | 0 | 0 | — | strobe synchronisers only; nothing reads them, so all is optimised away |
+| M3 BIU alone | synth | 242 | 329 | 0 | 0 | WNS +13.8 ns at 20 ns | `make synth TOP=rd68884_biu`, all ports kept; budget was ~600 LUTs |
 
 Budget (doc/architecture.md): about 3.5–4.5K LUTs, 1.3K flip-flops, 3–4 DSP and 10–15 RAMB36 for the complete design, with Fmax of 45–60 MHz.

@@ -49,11 +49,23 @@ package rd68884_pkg;
   // Save-CIR format words, FPU 6.4.2 and table 6-6. Version $1F is the
   // MC68881's.
   localparam logic [7:0]  FRAME_VERSION     = 8'h1F;
-  localparam logic [15:0] FRAME_NULL        = 16'h0000;
-  localparam logic [15:0] FRAME_COME_AGAIN  = 16'h0100;
-  localparam logic [15:0] FRAME_INVALID     = 16'h0200;
+  // The size byte of the null, come-again and invalid words is undefined by
+  // the interface; $18 as the FSAVE description in FPU 4.6 shows.
+  localparam logic [15:0] FRAME_NULL        = 16'h0018;
+  localparam logic [15:0] FRAME_COME_AGAIN  = 16'h0118;
+  localparam logic [15:0] FRAME_INVALID     = 16'h0218;
   localparam logic [15:0] FRAME_IDLE        = 16'h1F18;  // 24 bytes follow
   localparam logic [15:0] FRAME_BUSY        = 16'h1FB4;  // 180 bytes follow
+
+  // -------------------------------------------------------------------------
+  // What the BIU expects next (FPU 6.1.12; the pending-access code of the BIU
+  // flags, table 6-4, is derived from it).
+  // -------------------------------------------------------------------------
+  localparam logic [2:0] EXP_CMD  = 3'd0;   // a command or condition write
+  localparam logic [2:0] EXP_RESP = 3'd1;   // a response read (initial phase)
+  localparam logic [2:0] EXP_OPW  = 3'd2;   // an operand write
+  localparam logic [2:0] EXP_OPR  = 3'd3;   // an operand read
+  localparam logic [2:0] EXP_RSEL = 3'd4;   // a register select read
 
   // -------------------------------------------------------------------------
   // Exception vectors, FPU table 7-6.

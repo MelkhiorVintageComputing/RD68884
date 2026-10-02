@@ -15,7 +15,7 @@ RD68884 is an MC68881-compatible FPU for an MC68020: a real chip, or RD68021. It
 The design follows the original's split: a bus interface unit (BIU) and a microcoded arithmetic processing unit (APU). The APU is one narrow, general datapath. Everything that is not add, multiply, shift or normalise lives in microcode, and the microcode, tables and register file sit in block RAM, so LUTs go only to datapath and control.
 
 ```
- CLK pin ─(board PLL)─► clk_core  (≈50 MHz target; must be ≥ ~2.5–3× the bus clock)
+ CLK pin ─(board PLL)─► clk_core  (≈50 MHz target; any frequency works, slower = wait states)
  CS/AS/DS/RW/A4-0/SIZE ─► BIU ─ events ─► SEQUENCER ─ microword ─► APU datapath
  D31-0 _i/_o/_oe[3:0] ◄──┤  │ response/flags/staging ◄────────────┤  ▲   ▲
  DSACK1-0 _o/_oe       ◄──┘  └─ hardware auto-answers when busy      │   │
@@ -24,10 +24,12 @@ The design follows the original's split: a bus interface unit (BIU) and a microc
 
 ### Clocking
 - There is **one synchronous core domain, `clk_core`**. Bus strobes go through 2-flop synchronisers, as in RD68021's `rd68021_sync.sv`.
-- **The core cannot run at 1× CLK.** The AC specs on DSACK negation (#21), data float (#16) and the 40 ns DS-negated gap (#13) need either a faster core or the following:
-  - DSACK, its `_oe`, and the data `_oe` bits are **gated combinationally** by the raw START term, CS·AS·(R/W + DS) (section 12, note 8).
-  - The core clock period must be at most about 0.75 × the minimum strobe-negated width. That means a core clock of at least 33 MHz for a 16.67 MHz bus and at least 35 MHz for a 20 MHz bus. The PLL in the board wrapper supplies it.
-  - **Fallback**, only if a 1× core is ever required: a falling-edge-of-START toggle flop, so that no access is ever lost.
+- **DSACK and the data enables are gated combinationally by the raw START term**, CS·AS·(R/W + DS) (section 12, note 8). They release the bus the instant START falls, whatever the core clock is doing (specifications 16, 21, 22).
+- **A stale guard** is set asynchronously when START falls and cleared by the core once it has retired the cycle.
+  - It stops a new cycle from being acknowledged by the previous cycle's request.
+  - It makes even a strobe-negated gap shorter than one core clock visible (specification 13).
+  - So the core clock has no minimum relative to the bus; a slow one only adds wait states. The testbench runs core = bus. This replaces the planned "core ≥ 2.5× bus" rule: doc/bus-timing.md.
+- **The 50 MHz target comes from the datapath**, not from the bus.
 - The optional synchronous-read mode is not reproduced. Every cycle is answered asynchronously, which the protocol allows.
 
 ### BIU (`rd68884_biu`, about 600 LUTs)
@@ -37,7 +39,8 @@ The design follows the original's split: a bus interface unit (BIU) and a microc
   - **Four per-byte data `_oe` bits**, so only the active lane is driven: on narrow ports the board ties lanes together.
   - Events are raised only on the *last* beat of a register.
   - Immediate .B/.W operands are counted by length.
-- **96-bit operand staging register** for the operand CIR.
+- **Operand CIR:** one 32-bit staging register in each direction, handed over with valid/acknowledge. An access the sequencer is not ready for is held off by withholding DSACK (FPU 10.5); the sequencer keeps the counts.
+- **Implemented in M3:** 242 LUTs and 329 flip-flops (doc/size-and-speed.md). The sequencer interface is listed in the header of `rtl/rd68884_biu.sv`.
 - **Response register with `resp_valid`.** The microcode writes it. While `resp_valid` is clear, DSACK is held off for a short bounded time.
 - **Lifetime of primitives:**
   - One-shot primitives (evaluate-EA, transfer-single, transfer-multiple) revert to `$8900` once they have been read.
