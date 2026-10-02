@@ -44,6 +44,7 @@ These are places where the manual is silent or contradicts itself. Each is marke
 | An enabled SNAN, OPERR or DZ trap suppresses the store | The condition codes are not updated either |
 | FABS, FNEG, FSCALE, FMOD, FREM result | Rounded to the selected precision like every result (FPU 2.2.2). Their tables' "INEX2 cleared" holds in extended precision |
 | FSGLMUL/FSGLDIV inputs | Significands truncated to 24 bits, as FPU 4.5.5.2 says ("truncated to 23 bits" is the fraction) |
+| FSGLMUL/FSGLDIV tiny results | 24 significant bits, but never finer than the extended denormal quantum 2⁻¹⁶⁴⁴⁶: single precision with the extended exponent range, denormalised at the extended minimum |
 | FSCALE with \|integer part of source\| ≥ 2¹⁴ | Always overflows or underflows, as the FSCALE text says, even where the exact result would fit |
 | FMOD/FREM with an infinite source or zero FPn | Quotient byte = sign only, zero bits |
 | FMOVE to B/W/L out of range | OPERR alone, no INEX2; saturated result |

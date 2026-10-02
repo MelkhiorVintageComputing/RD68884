@@ -102,12 +102,14 @@ Project documents:
 ```sh
 make lint     # every rtl module under iverilog, Verilator and yosys
 make audit    # prove no register initialises outside reset
-make check    # the gate: lint, audit, model-test, sim
+make check    # the gate: ucode-check, lint, audit, model-test, iss-test, sim
 make sim      # the directed testbenches in sim/tb
 make ucode    # regenerate rtl/gen/ from tools/ucode/ (ucode-check is part of check)
 make sys      # the system with RD68021 as the MC68020, and the RTL/ISS lockstep
 make model-test      # the reference models' unit tests (doc/model.md)
 make testfloat       # the arithmetic model against TestFloat (make oracles builds it)
+make iss-arith       # the microcode against the model, ARITH_N random cases
+make iss-testfloat   # TestFloat's vectors through the microcode
 make synth    # Vivado out-of-context synthesis, xc7a35t
 make impl     # Vivado place and route, xc7a35t
 make lint-quartus / make quartus / make lint-questa

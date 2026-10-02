@@ -4,19 +4,16 @@
 
 """The microcode.
 
-M4 scope (doc/architecture.md): every coprocessor dialog, with the arithmetic
-stubbed. Implemented: FMOVE.X FPm,FPn; FMOVE.X <ea>,FPn; FMOVE.X FPm,<ea>;
-FMOVE/FMOVEM of the control registers; FMOVEM of the data registers, static
-and dynamic lists; the conditionals; pre-instruction exceptions from a
-pending exception; F-line for illegal command words; FSAVE/FRESTORE of null
-and idle frames. Every other general instruction answers F-line until its
-arithmetic exists (M5).
+Every coprocessor dialog (M4) and the core arithmetic (M5, in
+arith_ucode.py). FMOD, FREM, FSCALE, FMOVECR and packed decimal answer F-line
+until M6, the transcendentals until M7.
 
 Comments cite the manual (FPU = MC68881UM_split). The golden model of every
 dialog is tools/model/cpif.py; the field semantics are tools/iss/core.py.
 """
 
 from asm import Program
+import arith_ucode
 
 ETEMP = 8          # register file entry of the exceptional operand
 
@@ -89,50 +86,9 @@ def build():
     u(SEQ='RET')
 
     # =========================================================================
-    # Opclass 000, FPm to FPn. FPU 7.5.1.1, figure 7-17.
+    # Opclasses 000, 010 and 011: the arithmetic (tools/ucode/arith_ucode.py)
     # =========================================================================
-    L('op_rr')
-    u(SEQ='BR', NEG=1, COND='CMD_FMOVE', TGT='fline', comment='M4: FMOVE only')
-    u(RESP='WR', IMM=0x0900, ORS='PC', EXPECT='CMD', RF='READ', RFA='RX',
-      comment='null CA=0: release (PC if exceptions are enabled)')
-    u(SEQ='WAIT', COND='RESP_READ', ASRC='RFQ', comment='the PC transfer, if asked, follows the read')
-    u(RF='WRITE', RFA='RY', FPSR='CC_CLREXC')
-    L('done')
-    u(RESP='WRC', IMM=0x0802, EXPECT='CMD', SEQ='JUMP', TGT='idle', comment='null CA=0 PF=1')
-
-    # =========================================================================
-    # Opclass 010, <ea> to FPn. FPU 7.5.1.2, figure 7-18.
-    # =========================================================================
-    L('op_mem')
-    u(SEQ='BR', NEG=1, COND='CMD_FMOVE', TGT='fline', comment='M4: FMOVE only')
-    u(SEQ='DISP', IDX='RX', TGT='t_memfmt')
-    L('mem_x')
-    u(RESP='WR', IMM=0x960C, ORS='PC', ONESHOT=1, EXPECT='OPW', comment='evaluate <ea>, 12 bytes')
-    u(SEQ='CALL', TGT='wait_first')
-    for k in range(3):
-        u(SEQ='WAIT', COND='OPW_VALID')
-        u(BIU='OPW_ACK', TSRC='OPW', TDST=f'XI{k}')
-    u(RESP='WR', IMM=0x0900, EXPECT='CMD', ASRC='UNPACKX', comment='release')
-    u(RF='WRITE', RFA='RY', FPSR='CC_CLREXC', SEQ='JUMP', TGT='done')
-
-    # =========================================================================
-    # Opclass 011, FPm to <ea>. FPU 7.5.1.3, figure 7-20.
-    # =========================================================================
-    L('op_out')
-    u(SEQ='DISP', IDX='RX', TGT='t_outfmt')
-    L('out_x')
-    u(RESP='WR', IMM=0x8900, ORS='PC', ONESHOT=1, EXPECT='RESP', RF='READ', RFA='RY',
-      comment='null CA=1 while converting (PC if enabled)')
-    u(SEQ='CALL', TGT='wait_first')
-    u(ASRC='RFQ')
-    u(XOP='PACKX', FPSR='CLREXC')
-    u(RESP='WR', IMM=0xB20C, ONESHOT=1, EXPECT='OPR', TSRC='XI0', BIU='OPR_WR',
-      comment='evaluate <ea> and transfer out, 12 bytes')
-    u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
-    for k in (1, 2):
-        u(TSRC=f'XI{k}', BIU='OPR_WR')
-        u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
-    u(RESP='WR', IMM=0x0802, EXPECT='CMD', SEQ='JUMP', TGT='idle')
+    arith_ucode.emit(p)
 
     # =========================================================================
     # Opclass 100/101, the control registers. FPU 7.5.1.4, figure 7-22; the
@@ -290,8 +246,6 @@ def build():
     # =========================================================================
     p.table('t_opclass', 3, {0: 'op_rr', 1: 'fline', 2: 'op_mem', 3: 'op_out',
                              4: 'ctl_in', 5: 'ctl_out', 6: 'mm_in', 7: 'mm_out'}, 'fline')
-    p.table('t_memfmt', 3, {2: 'mem_x'}, 'fline')
-    p.table('t_outfmt', 3, {2: 'out_x'}, 'fline')
     p.table('t_ctlin', 3, {0: 'ci_iar', 1: 'ci_iar', 2: 'ci_1', 4: 'ci_1',
                            3: 'ci_2', 5: 'ci_2', 6: 'ci_2', 7: 'ci_3'}, 'fline')
     p.table('t_ctlout', 3, {0: 'co_iar', 1: 'co_iar', 2: 'co_1', 4: 'co_1',

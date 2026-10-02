@@ -242,6 +242,7 @@ class IssOnly(unittest.TestCase):
             flags = h.mem.read(h.a[7] + 0x18, 4)
             self.assertEqual(flags >> 28 & 7, C.PEND_GEN)
             h.fgen(cmd(2, FMT_X, 6, 0), ('imm', x96(fin(0, 77, 0)), 12))
+            h.fcond(0)      # FNOP: FRESTORE aborts a running instruction (FPU 7.2.4)
             h.frestore(('postinc', 7))
         m.poll_hook = handler
         m.fgen(cmd(2, FMT_X, 1, 0), ('imm', x96(fin(0, 42, 0)), 12))

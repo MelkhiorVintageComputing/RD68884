@@ -158,12 +158,14 @@ module sys_tb;
     peek = {s32.mem[a], s32.mem[a+1], s32.mem[a+2], s32.mem[a+3]};
   endfunction
 
-  string       image;
-  int unsigned n, limit;
+  string       image, dump;
+  int unsigned n, limit, k;
+  int          fd;
 
   initial begin
     if (!$value$plusargs("image=%s", image)) image = "build/programs/fpu_m4.hex";
     if (!$value$plusargs("limit=%d", limit)) limit = 400000;
+    if (!$value$plusargs("dump=%s", dump)) dump = "";
     $readmemh(image, s32.mem);
     rst_n = 1'b0;
     repeat (8) @(posedge clk);
@@ -175,6 +177,14 @@ module sys_tb;
       n = n + 1;
     end
     if (ls != 0) $fclose(ls);
+    // A C program's data buffer (sim/programs/fparith.c): RES+$14 long words
+    // from RES+$100, for tools/fparith_compare.py.
+    if (dump != "") begin
+      fd = $fopen(dump, "w");
+      for (k = 0; k < peek(RES + 32'h14); k = k + 1)
+        $fdisplay(fd, "%08h", peek(RES + 32'h100 + 4 * k));
+      $fclose(fd);
+    end
     $display("sys_tb: port %0d, FPU clock %.1f ns, %0d CPU clocks", PORT, fpu_ns, n);
     if (peek(RES) !== DONE) begin
       $display("FAIL: sys_tb: the program did not finish (PC %08h)", cpu.u_ifu.pc_d);

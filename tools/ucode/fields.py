@@ -35,7 +35,13 @@ FIELDS = [
               'NULL_STATE', 'CTR_ZERO', 'MASK_ZERO', 'TF', 'BSUN', 'BSUN_EN',
               'REST_NULL', 'REST_IDLE', 'FLINE', 'REPORTS', 'PCEN', 'LST_CR',
               'LST_SR', 'LST_IAR', 'DYN_LIST', 'PV', 'PEND_GEN', 'PEND_COND',
-              'IS_COND', 'CMD_FMOVE']),
+              'IS_COND', 'CMD_FMOVE',
+              # M5: the datapath (doc/microcode.md)
+              'A_ZERO', 'A_INF', 'A_NAN', 'A_SNAN', 'A_SIGN', 'B_ZERO', 'B_INF',
+              'B_NAN', 'B_SNAN', 'B_SIGN', 'A_J', 'AE_LT_EMIN', 'AE_GT_EMAX',
+              'AE_LT_XMIN', 'AE_LT_B', 'AE_GE_IMM', 'AE_ODD', 'RINEX', 'RX0',
+              'OVF_INF', 'INT_OVF', 'B_LT_A', 'B_EQ_A', 'TRAP', 'SUPPRESS',
+              'PREC_X', 'SIGN_XOR', 'RM_MODE', 'PREC_SGLX']),
     ('IDX', ['OPCLASS', 'RX', 'OPMODE']),
     ('TGT', UADDR_BITS),
     ('IMM', 16),
@@ -68,12 +74,35 @@ FIELDS = [
     # RF WRITE: RF[addr] <= A (A as it was at the start of the clock).
     ('RF', ['NONE', 'READ', 'WRITE']),
     ('RFA', ['IMM', 'RX', 'RY', 'RN', 'ETEMP', 'CTR']),
-    # A <= RFQ, unpack(XI) as extended, the default NaN, or zero.
-    ('ASRC', ['NONE', 'RFQ', 'UNPACKX', 'NAN', 'ZERO']),
-    # XI <= pack(A) as extended.
-    ('XOP', ['NONE', 'PACKX']),
-    # FPSR: the condition codes from A, and/or clear the exception byte.
-    ('FPSR', ['NONE', 'CC', 'CLREXC', 'CC_CLREXC']),
+    # A <= RFQ, unpack(XI) in a format, the default NaN, zero, or B (with
+    # the sticky bit from its saved copy: B's save and A's restore).
+    ('ASRC', ['NONE', 'RFQ', 'UNPACKX', 'NAN', 'ZERO', 'B', 'UNPACKS',
+              'UNPACKD', 'UNPACKL', 'UNPACKW', 'UNPACKB']),
+    # B <= RFQ, or A (and STKB <= STK).
+    ('BSRC', ['NONE', 'RFQ', 'A']),
+    # XI <= A packed: extended, single, double; an integer (B/W/L from the
+    # command word's format); a NaN's top bits as an integer; the saturated
+    # integer of A's sign (FPU 6.1.3).
+    ('XOP', ['NONE', 'PACKX', 'PACKS', 'PACKD', 'PACKI', 'PACKNI', 'PACKSAT']),
+    # FPSR: the condition codes from A, clear the exception byte, accrue it
+    # (FPU 2.3.4), or set the condition codes to IMM[3:0].
+    ('FPSR', ['NONE', 'CC', 'CLREXC', 'CC_CLREXC', 'ACCRUE', 'CCIMM']),
+    ('EXCSET', 8),                    # OR into the FPSR exception byte
+
+    # ---- the arithmetic ---------------------------------------------------------
+    # Mantissa operations, one per clock (doc/microcode.md has each one).
+    ('MOP', ['NONE', 'ADD', 'SUB', 'NEG', 'SHRA', 'SHRB', 'NORM', 'RSH1',
+             'ROUND', 'ROUNDX', 'TRUNCA', 'TRUNCB', 'CLRQ', 'CLRAM',
+             'MULSTEP', 'MULFIN', 'DIVSTEP', 'DIVFIN', 'SQSTEP', 'SQFIN',
+             'EXPF', 'QUIET', 'INFA', 'MAXA', 'ZEROM']),
+    # Exponent and shift-amount operations.
+    ('EOP', ['NONE', 'ADDB', 'SUBB', 'ADDI', 'LDI', 'SA_AB', 'SA_IA', 'SA_IMM',
+             'SA_EMIN', 'LDEMIN', 'HALF']),
+    ('SGN', ['NONE', 'NEG', 'ABS', 'XOR', 'RMZ']),
+    # The precision and rounding mode registers every precision-dependent
+    # operation reads (PSR: X, S, D or SGLX; RMR: a rounding mode).
+    ('PSR', ['NONE', 'FPCR', 'X', 'S', 'D', 'SGLX']),
+    ('RMR', ['NONE', 'FPCR', 'RZ']),
 
     # ---- counters, the FMOVEM mask, flags ---------------------------------------
     ('CTR', ['NONE', 'LOAD', 'DEC']),

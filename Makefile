@@ -49,7 +49,8 @@ IVFLAGS := -g2012 -Wall -Wno-timescale
 
 .PHONY: all help dirs lint lint-source lint-iverilog lint-verilator lint-yosys \
         lint-quartus lint-questa synth impl quartus audit check print-rtl clean \
-        oracles model-test testfloat testfloat-full sim ucode ucode-check iss-test sys
+        oracles model-test testfloat testfloat-full iss-testfloat iss-arith sim ucode ucode-check \
+        iss-test sys
 
 all: lint
 
@@ -70,6 +71,8 @@ help:
 	@echo "  make oracles      build SoftFloat and TestFloat into $(BUILD)/oracles"
 	@echo "  make testfloat    the arithmetic model against TestFloat, 3000 vectors a case"
 	@echo "  make testfloat-full  ... every level-1 vector (minutes)"
+	@echo "  make iss-testfloat   TestFloat through the microcode (the ISS), 300 a case"
+	@echo "  make iss-arith    the microcode against the model, ARITH_N random cases"
 	@echo
 	@echo "The system, with RD68021 ($(RD68021)) as the MC68020:"
 	@echo "  make sys          sim/programs/fpu_m4.S on every port width, and the"
@@ -185,6 +188,16 @@ testfloat: oracles
 testfloat-full: oracles
 	@set -o pipefail; $(PYENV) python3 tools/model/check_testfloat.py | grep -v ': ok$$'
 
+# The same vectors through the microcode (the ISS), with every dialog.
+iss-testfloat: oracles ucode-check
+	@set -o pipefail; $(PYENV) python3 tools/iss/check_testfloat.py --limit 300 | grep -v ': ok$$'
+
+# The microcode against the golden model on random operands: ARITH_N cases.
+ARITH_N ?= 20000
+iss-arith: ucode-check
+	@ARITH_N=$(ARITH_N) $(PYENV) python3 -m unittest iss.tests.test_arith \
+	  && echo "PASS: iss-arith, $(ARITH_N) cases"
+
 # ---------------------------------------------------------------------------
 # Directed testbenches -- M3
 #
@@ -216,28 +229,75 @@ sim: dirs
 # ---------------------------------------------------------------------------
 RD68021 ?= ../RD68021
 CROSS   := m68k-linux-gnu-
-SYSPROGS := fpu_m4
+# fparith and fparith-dbl (below) join with M6: gcc loads 0.0 with FMOVECR.
+SYSPROGS  ?= fpu_m4 fpu_m5
+SYS_PORTS ?= 32 16 8
+
+# fpu_m5's vectors come from the golden model.
+$(BUILD)/programs/fpu_m5_vec.S: sim/programs/gen_fpu_m5.py tools/model/arith.py | dirs
+	@mkdir -p $(BUILD)/programs
+	@$(PYENV) python3 sim/programs/gen_fpu_m5.py $@ 150 5
+$(BUILD)/programs/fpu_m5.hex: $(BUILD)/programs/fpu_m5_vec.S
+
+# fparith.c (copied from RD68021), twice: at extended rounding precision
+# against the host's x87, and at double against its SSE (the comment at its
+# top). C11, so that both sides round on every assignment; __builtin_sqrt is
+# FSQRT only when nothing has to set errno. FPARITH_NO_TRANS until M7.
+CFLAGS68  := -O2 -fno-builtin -fomit-frame-pointer -nostdlib -ffreestanding \
+             -Wall -Wextra -std=c11 -fno-math-errno -DFPARITH_NO_TRANS
+FPARITHCC := -std=c11 -O2 -fno-math-errno -ffp-contract=off -DFPARITH_NO_TRANS
+
+$(BUILD)/programs/crt0.o: sim/programs/crt0.S | dirs
+	@mkdir -p $(BUILD)/programs
+	@$(CROSS)as -mcpu=68020 -m68881 -o $@ $<
+$(BUILD)/programs/fparith.o: sim/programs/fparith.c | dirs
+	@mkdir -p $(BUILD)/programs
+	@$(CROSS)gcc -c $(CFLAGS68) -o $@ $<
+$(BUILD)/programs/fparith-dbl.o: sim/programs/fparith.c | dirs
+	@mkdir -p $(BUILD)/programs
+	@$(CROSS)gcc -c $(CFLAGS68) -DFPU_PREC_DOUBLE -o $@ $<
+FPARITH_HEX := $(BUILD)/programs/fparith.hex $(BUILD)/programs/fparith-dbl.hex
+$(FPARITH_HEX): $(BUILD)/programs/%.hex: $(BUILD)/programs/%.o $(BUILD)/programs/crt0.o \
+                $(BUILD)/programs/%.expect sim/programs/flat.ld
+	@$(CROSS)gcc -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments,--build-id=none \
+	    -T sim/programs/flat.ld -o $(BUILD)/programs/$*.elf \
+	    $(BUILD)/programs/crt0.o $< -lgcc
+	@$(CROSS)objcopy -O verilog --verilog-data-width=1 $(BUILD)/programs/$*.elf $@
+$(BUILD)/programs/fparith.expect: sim/programs/fparith.c | dirs
+	@cc $(FPARITHCC) -mfpmath=387 -o $(BUILD)/programs/fparith-host $< -lm
+	@$(BUILD)/programs/fparith-host > $@ 2> $(BUILD)/programs/fparith.exact
+$(BUILD)/programs/fparith-dbl.expect: sim/programs/fparith.c | dirs
+	@cc $(FPARITHCC) -mfpmath=sse -o $(BUILD)/programs/fparith-dbl-host $< -lm
+	@$(BUILD)/programs/fparith-dbl-host > $@ 2> $(BUILD)/programs/fparith-dbl.exact
 
 $(BUILD)/programs/%.hex: sim/programs/%.S sim/programs/flat.ld | dirs
 	@mkdir -p $(BUILD)/programs
-	@$(CROSS)as -mcpu=68020 -m68881 -o $(BUILD)/programs/$*.o $<
+	@$(CROSS)as -mcpu=68020 -m68881 -I $(BUILD)/programs -o $(BUILD)/programs/$*.o $<
 	@$(CROSS)ld --no-warn-rwx-segments -T sim/programs/flat.ld -o $(BUILD)/programs/$*.elf $(BUILD)/programs/$*.o
 	@$(CROSS)objcopy -O verilog --verilog-data-width=1 $(BUILD)/programs/$*.elf $@
 
 sys: ucode-check $(patsubst %,$(BUILD)/programs/%.hex,$(SYSPROGS))
 	@test -d $(RD68021) || { echo "FAIL: no RD68021 at $(RD68021)"; exit 1; }
 	@rd="$$(cd $(RD68021) && $(MAKE) -s print-rtl | sed 's#\(\S*\)#$(RD68021)/\1#g')"; \
-	ok=1; for port in 32 16 8; do \
+	ok=1; for port in $(SYS_PORTS); do \
 	  iverilog $(IVFLAGS) -DSYS_PORT=$$port -o $(BUILD)/sys_tb_$$port.vvp -s sys_tb \
 	    $(RTL) $$rd $(RD68021)/sim/models/rd68021_slave.sv sim/tb/sys_tb.sv \
 	    > $(BUILD)/sys_tb_$$port.clog 2>&1 || { grep -v $(NOTES) $(BUILD)/sys_tb_$$port.clog | head; exit 1; }; \
 	  for p in $(SYSPROGS); do \
 	    ls=""; if [ $$port = 32 ]; then ls="+lockstep=$(BUILD)/sys-$$p.lockstep"; fi; \
-	    vvp $(BUILD)/sys_tb_$$port.vvp +image=$(BUILD)/programs/$$p.hex $$ls \
+	    dp=""; if [ -f $(BUILD)/programs/$$p.expect ]; then dp="+dump=$(BUILD)/sys-$$p-$$port.dump"; fi; \
+	    vvp $(BUILD)/sys_tb_$$port.vvp +image=$(BUILD)/programs/$$p.hex +limit=4000000 $$ls $$dp \
 	      > $(BUILD)/sys-$$p-$$port.log 2>&1; \
 	    if grep -q '^PASS' $(BUILD)/sys-$$p-$$port.log; then \
 	      echo "  $$p, $$port-bit port: $$(grep '^PASS' $(BUILD)/sys-$$p-$$port.log)"; \
 	    else grep -E '^FAIL|sys_tb:' $(BUILD)/sys-$$p-$$port.log; ok=0; fi; \
+	    if [ -n "$$dp" ]; then \
+	      python3 tools/fparith_compare.py $(BUILD)/programs/$$p.expect $(BUILD)/sys-$$p-$$port.dump \
+	        $$(sed -n 's/^exact \([0-9]*\) of.*/\1/p' $(BUILD)/programs/$$p.exact) \
+	        > $(BUILD)/sys-$$p-$$port.cmp; \
+	      grep -E '^  FAIL|exact long words match' $(BUILD)/sys-$$p-$$port.cmp | head -5 | sed 's/^/  /'; \
+	      grep -q '^PASS' $(BUILD)/sys-$$p-$$port.cmp || ok=0; \
+	    fi; \
 	    if [ $$port = 32 ]; then \
 	      $(PYENV) python3 tools/iss/lockstep.py $(BUILD)/sys-$$p.lockstep | sed 's/^/  /' || ok=0; \
 	    fi; \

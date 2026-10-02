@@ -61,8 +61,14 @@ The design follows the original's split: a bus interface unit (BIU) and a microc
 - **Forced traps** override the micro-PC: RESET, ABORT (control-CIR write), RESTORE.
 - **Three 7-bit operand-pointer registers** let add, multiply, divide and round be reusable micro-subroutines, which keeps the transcendental microcode small.
 - **Branch timing:** two cycles per microinstruction, or one cycle with a delay slot. This is chosen at synthesis checkpoint M5 by Fmax.
+  - **Decided at M5: one cycle, with no delay slot.** The registered ROM is read at the next micro-address, and that met 56.8 MHz after place and route (doc/size-and-speed.md).
 
 ### APU datapath (`rd68884_apu` plus sub-units, about 2.5K LUTs)
+- **As built in M5,** it lives inside `rd68884_seq`, and doc/microcode.md describes it. It differs from the plan below in four ways:
+  - one shared adder;
+  - one right shifter, which also normalises in a single clock by bit reversal;
+  - `A`, `B` and `C` with no operand pointers yet;
+  - about 3.4K LUTs.
 - **Internal format:**
   - 1-bit sign;
   - 18-bit two's-complement unbiased exponent;
