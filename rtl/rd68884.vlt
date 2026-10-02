@@ -17,3 +17,7 @@
 // the numbers are written down once, with their citation -- so an unused one is
 // the normal case rather than a defect.
 lint_off -rule UNUSEDPARAM -file "*rtl/rd68884_pkg.sv"
+
+// The same for the generated microword package: it names every encoding the
+// microcode may use, and an encoding no microinstruction uses yet is normal.
+lint_off -rule UNUSEDPARAM -file "*rtl/gen/rd68884_ucode_pkg.sv"

@@ -57,6 +57,7 @@ These are places where the manual is silent or contradicts itself. Each is marke
 | Infinity | Integer bit written as 0 (it is a don't-care, table 3-3) |
 | FMOVE to FPSR | Bits 31–28 and 2–0 written as zero |
 | Exception pending with no enabled exception in EXC & ENABLE | Reported as vector 49 (the frame was edited by software, FPU 6.4.2.2) |
+| A conditional's result primitive (`$0800`/`$0801`) | Stays in the response CIR once read, rather than reverting to `$0802` |
 | Null, come-again and invalid format words | `$0018`, `$0118` and `$0218`, as in the FSAVE description |
 
 ## The frames
@@ -67,7 +68,7 @@ These are places where the manual is silent or contradicts itself. Each is marke
 |---|---|
 | $04 | Command/condition word, then `$FFFF` |
 | $08–$13 | The exceptional operand |
-| $14 | The last operand-CIR long word |
+| $14 | All ones: the operand register image, whose byte-valid flags are all zero |
 | $18 | The BIU flags |
 
 In the BIU flags:

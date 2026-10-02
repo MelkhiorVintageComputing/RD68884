@@ -54,6 +54,7 @@ The design follows the original's split: a bus interface unit (BIU) and a microc
 - **Unimplemented and reserved CIRs:** reads of reserved, write-only or unimplemented CIRs return all ones; a write to register-select is a protocol violation.
 
 ### Sequencer (`rd68884_seq`, about 300 LUTs)
+- **Implemented in M4:** see doc/microcode.md for the field set as built (one cycle per microinstruction) and how it is checked.
 - **Microcode store:** about 2–4K words of about 96 bits, in BRAM. It is a generated `case` ROM with a registered output; the MIR is the one register exempt from reset.
 - **Next-address operations:** NEXT, JMP, BR on a condition (a 64-way mux, polarity bit), CALL and RET (4-deep stack), LOOP on a 16-bit counter, DISP, and WAIT on a condition.
 - **Dispatch has no dispatch ROM in logic.** DISP is an indirect jump `IMM | index` into jump tables held in the microcode BRAM (opmode, format, opclass, predicate). The BRAM words are free; LUTs are not.

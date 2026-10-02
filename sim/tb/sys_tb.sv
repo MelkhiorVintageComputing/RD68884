@@ -1,0 +1,193 @@
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Copyright 2026 Romain Dolbeau
+// Source location: https://github.com/MelkhiorVintageComputing/RD68884
+
+// RD68884 -- the system: RD68021 (../RD68021, used as it stands, never edited)
+// running a program from memory, with RD68884 as its coprocessor at CpID 1.
+//
+//   memory     RD68021's own slave model, a 32-bit port at $0, 64 KB
+//   the FPU    on a clock of its own (+fpu_ns, default 20 ns against the CPU's
+//              60), behind an early chip select decoded from FC = 7, A19-A16 =
+//              2, A15-A13 = 1 (FPU 10.3, figure 10-4); SIZE and A0 strapped for
+//              the port width of the build (SYS_PORT 32, 16 or 8), the data
+//              lanes of a narrow port tied as the board would (FPU section 11)
+//
+// The program is the check (sim/programs/fpu_m4.S): it fills a results block
+// and sets 'DONE'; this waits for that and reports it.
+//
+// +lockstep=FILE writes, every FPU clock, what the BIU drove into the
+// sequencer and what the sequencer drove back, for tools/iss/lockstep.py to
+// replay on the ISS (doc/microcode.md).
+
+`timescale 1ns / 1ps
+
+`ifndef SYS_PORT
+`define SYS_PORT 32
+`endif
+
+module sys_tb;
+
+  localparam real CPU_NS = 60.0;
+  localparam int unsigned RES  = 32'h0000_C000;
+  localparam int unsigned DONE = 32'h444F_4E45;
+
+  real  fpu_ns;
+  logic clk, clk_fpu, rst_n;
+
+  initial begin
+    if (!$value$plusargs("fpu_ns=%f", fpu_ns)) fpu_ns = 20.0;
+    clk = 1'b0;
+    forever #(CPU_NS / 2.0) clk = ~clk;
+  end
+  initial begin
+    clk_fpu = 1'b0;
+    #1;
+    forever #(fpu_ns / 2.0) clk_fpu = ~clk_fpu;
+  end
+
+  // ---- the processor ----------------------------------------------------------
+  logic  [2:0] fc_o;
+  logic        fc_oe;
+  logic [31:0] a_o;
+  logic        a_oe;
+  logic [31:0] d_o;
+  logic        d_oe;
+  logic  [1:0] siz_o;
+  logic        siz_oe, ecs_n_o, ocs_n_o, rw_o, rw_oe, rmc_n_o, rmc_oe;
+  logic        as_n_o, as_oe, ds_n_o, ds_oe, dben_o, dben_oe;
+  logic  [1:0] dsack_n_i;
+  logic        ipend_n_o, bg_n_o, reset_n_o, reset_n_oe, halt_n_o, halt_n_oe;
+
+  wire [31:0] dbus;
+  assign dbus = d_oe ? d_o : 32'bz;
+
+  rd68021_top #(.ICACHE_ENTRIES (64), .COPROCESSOR (1'b1)) cpu (
+      .clk (clk), .rst_n (rst_n),
+      .fc_o (fc_o), .fc_oe (fc_oe), .a_o (a_o), .a_oe (a_oe),
+      .d_i (dbus), .d_o (d_o), .d_oe (d_oe),
+      .siz_o (siz_o), .siz_oe (siz_oe), .ecs_n_o (ecs_n_o), .ocs_n_o (ocs_n_o),
+      .rw_o (rw_o), .rw_oe (rw_oe), .rmc_n_o (rmc_n_o), .rmc_oe (rmc_oe),
+      .as_n_o (as_n_o), .as_oe (as_oe), .ds_n_o (ds_n_o), .ds_oe (ds_oe),
+      .dben_o (dben_o), .dben_oe (dben_oe), .dsack_n_i (dsack_n_i),
+      .ipl_n_i (3'b111), .ipend_n_o (ipend_n_o), .avec_n_i (1'b1),
+      .br_n_i (1'b1), .bg_n_o (bg_n_o), .bgack_n_i (1'b1), .berr_n_i (1'b1),
+      .reset_n_i (1'b1), .reset_n_o (reset_n_o), .reset_n_oe (reset_n_oe),
+      .halt_n_i (1'b1), .halt_n_o (halt_n_o), .halt_n_oe (halt_n_oe),
+      .cdis_n_i (1'b1));
+
+  // ---- memory -------------------------------------------------------------------
+  logic  [1:0] dsack32;
+  wire  [31:0] d32;
+  logic        oe32;
+  assign dbus = oe32 ? d32 : 32'bz;
+
+  rd68021_slave #(.PORT_BYTES (4), .WAITS (0), .BASE (32'h0000_0000),
+                  .MASK (32'hF000_0000), .ABITS (16)) s32 (
+      .clk (clk), .rst_n (rst_n), .a_i (a_o), .siz_i (siz_o), .fc_i (fc_o),
+      .as_n_i (as_n_o), .ds_n_i (ds_n_o), .rw_i (rw_o), .d_i (dbus),
+      .wr_inhibit_i (1'b0), .d_o (d32), .d_oe (oe32), .dsack_n_o (dsack32));
+
+  // ---- the FPU ------------------------------------------------------------------
+  localparam int PORT = `SYS_PORT;
+  logic        cs_n;
+  logic [31:0] fpu_d_i, fpu_d_o;
+  logic  [3:0] fpu_d_oe;
+  logic  [1:0] fpu_dsack_n;
+  logic        fpu_dsack_oe;
+
+  // Early chip select: no AS in the decode (FPU 10.3).
+  assign cs_n = !(fc_o == 3'd7 && a_o[19:16] == 4'h2 && a_o[15:13] == 3'd1);
+
+  // The lanes: on a 16-bit port D15-D0 of the FPU are tied to D31-D16, on an
+  // 8-bit port all four bytes to D31-D24.
+  generate
+    if (PORT == 32) begin : g32
+      for (genvar l = 0; l < 4; l++) begin : g
+        assign dbus[8*l +: 8] = fpu_d_oe[l] ? fpu_d_o[8*l +: 8] : 8'bz;
+      end
+      assign fpu_d_i = dbus;
+    end else if (PORT == 16) begin : g16
+      for (genvar l = 0; l < 4; l++) begin : g
+        assign dbus[8*(l | 2) +: 8] = fpu_d_oe[l] ? fpu_d_o[8*l +: 8] : 8'bz;
+      end
+      assign fpu_d_i = {dbus[31:16], dbus[31:16]};
+    end else begin : g8
+      for (genvar l = 0; l < 4; l++) begin : g
+        assign dbus[31:24] = fpu_d_oe[l] ? fpu_d_o[8*l +: 8] : 8'bz;
+      end
+      assign fpu_d_i = {4{dbus[31:24]}};
+    end
+  endgenerate
+
+  rd68884_top fpu (
+      .clk (clk_fpu), .rst_n (rst_n), .reset_n_i (1'b1),
+      .cs_n_i (cs_n), .as_n_i (as_n_o), .ds_n_i (ds_n_o), .rw_i (rw_o),
+      .size_n_i (PORT != 8),
+      .a_i ({a_o[4:1], (PORT == 32) ? 1'b1 : (PORT == 16) ? 1'b0 : a_o[0]}),
+      .d_i (fpu_d_i), .d_o (fpu_d_o), .d_oe (fpu_d_oe),
+      .dsack_n_o (fpu_dsack_n), .dsack_oe (fpu_dsack_oe));
+
+  // DSACK with the board's pull-ups.
+  assign dsack_n_i = dsack32 & (fpu_dsack_oe ? fpu_dsack_n : 2'b11);
+
+  // ---- lockstep recording ----------------------------------------------------------
+  integer ls;
+  string  ls_file;
+  initial begin
+    ls = 0;
+    if ($value$plusargs("lockstep=%s", ls_file)) ls = $fopen(ls_file, "w");
+  end
+  // BIU outputs, then the sequencer's outputs, then its micro-address, in the
+  // order tools/iss/lockstep.py reads them. Sampled just before the edge.
+  always @(posedge clk_fpu) if (ls != 0 && rst_n) begin
+    $fwrite(ls, "%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h | ",
+      fpu.arch_reset, fpu.cmd_pend, fpu.cmd_cond, fpu.cmd_word, fpu.opw_valid,
+      fpu.opw_data, fpu.opr_valid, fpu.save_req, fpu.restore_req,
+      fpu.restore_word, fpu.fpiar, fpu.pv, fpu.resp_read, fpu.rsel_read,
+      fpu.save_read, fpu.abort);
+    $fwrite(ls, "%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h | %h\n",
+      fpu.resp_we, fpu.resp, fpu.resp_oneshot, fpu.expect_v, fpu.resp_cond,
+      fpu.cmd_ack, fpu.opw_ack, fpu.opr_we, fpu.opr, fpu.rsel_we, fpu.rsel,
+      fpu.rsel_dir, fpu.save_we, fpu.save_v, fpu.save_xfer, fpu.restore_we,
+      fpu.restore_v, fpu.restore_xfer, fpu.fpiar_we, fpu.fpiar_v, fpu.clear,
+      fpu.u_seq.upc);
+  end
+
+  // ---- the run ----------------------------------------------------------------------
+  function automatic logic [31:0] peek(input int unsigned a);
+    peek = {s32.mem[a], s32.mem[a+1], s32.mem[a+2], s32.mem[a+3]};
+  endfunction
+
+  string       image;
+  int unsigned n, limit;
+
+  initial begin
+    if (!$value$plusargs("image=%s", image)) image = "build/programs/fpu_m4.hex";
+    if (!$value$plusargs("limit=%d", limit)) limit = 400000;
+    $readmemh(image, s32.mem);
+    rst_n = 1'b0;
+    repeat (8) @(posedge clk);
+    @(negedge clk);
+    rst_n = 1'b1;
+    n = 0;
+    while (peek(RES) !== DONE && n < limit) begin
+      @(posedge clk);
+      n = n + 1;
+    end
+    if (ls != 0) $fclose(ls);
+    $display("sys_tb: port %0d, FPU clock %.1f ns, %0d CPU clocks", PORT, fpu_ns, n);
+    if (peek(RES) !== DONE) begin
+      $display("FAIL: sys_tb: the program did not finish (PC %08h)", cpu.u_ifu.pc_d);
+    end else if (peek(RES + 32'h10) !== 0) begin
+      $display("FAIL: sys_tb: unexpected exception, vector %0d", peek(RES + 32'h10));
+    end else if (peek(RES + 8) !== 0) begin
+      $display("FAIL: sys_tb: %0d of %0d checks failed, first #%0d: found %08h, wanted %08h",
+               peek(RES + 8), peek(RES + 4), peek(RES + 12), peek(RES + 32'h18),
+               peek(RES + 32'h1C));
+    end else begin
+      $display("PASS: sys_tb, %0d checks", peek(RES + 4));
+    end
+    $finish;
+  end
+
+endmodule

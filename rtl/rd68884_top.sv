@@ -17,9 +17,9 @@
 //     MC68881's RESET pin is reset_n_i, the architectural reset (FPU 9.9).
 //   - SENSE is a wire to ground on the board (FPU 9.11), not a core port.
 //
-// M3: the bus interface unit, with its sequencer side tied off until the
-// sequencer exists (M4). A command is accepted and answered with null (CA=1)
-// for ever; everything else on the bus already behaves.
+// The bus interface unit (rd68884_biu) and the microsequencer with its
+// datapath (rd68884_seq). M4: every dialog; the arithmetic arrives in M5
+// (doc/architecture.md).
 
 module rd68884_top (
     input  logic        clk,
@@ -49,11 +49,18 @@ module rd68884_top (
     output logic        dsack_oe
 );
 
-  logic        arch_reset;
-  logic        cmd_pend, cmd_cond, opw_valid, opr_valid, save_req, restore_req;
+  // BIU <-> sequencer (the port lists of rd68884_biu and rd68884_seq).
+  logic        arch_reset, cmd_pend, cmd_cond, opw_valid, opr_valid, save_req;
+  logic        restore_req, resp_read, rsel_read, save_read, abort, pv;
   logic [15:0] cmd_word, restore_word;
   logic [31:0] opw_data, fpiar;
-  logic        resp_read, rsel_read, save_read, abort, pv;
+  logic        resp_we, resp_oneshot, resp_cond, cmd_ack, opw_ack, opr_we;
+  logic        rsel_we, rsel_dir, save_we, restore_we, fpiar_we, clear;
+  logic [15:0] resp, save_v, restore_v;
+  logic [2:0]  expect_v;
+  logic [31:0] opr, fpiar_v;
+  logic [7:0]  rsel;
+  logic [5:0]  save_xfer, restore_xfer;
 
   rd68884_biu u_biu (
       .clk           (clk),
@@ -71,32 +78,37 @@ module rd68884_top (
       .dsack_n_o     (dsack_n_o),
       .dsack_oe      (dsack_oe),
       .arch_reset_o  (arch_reset),
-      .resp_we_i     (1'b0),
-      .resp_i        (16'h0000),
-      .resp_oneshot_i(1'b0),
-      .expect_i      (3'd0),
+      .resp_we_i     (resp_we),
+      .resp_i        (resp),
+      .resp_oneshot_i(resp_oneshot),
+      .expect_i      (expect_v),
+      .resp_cond_i   (resp_cond),
       .cmd_pend_o    (cmd_pend),
       .cmd_cond_o    (cmd_cond),
       .cmd_word_o    (cmd_word),
-      .cmd_ack_i     (1'b0),
+      .cmd_ack_i     (cmd_ack),
       .opw_valid_o   (opw_valid),
       .opw_data_o    (opw_data),
-      .opw_ack_i     (1'b0),
-      .opr_we_i      (1'b0),
-      .opr_i         (32'h0000_0000),
+      .opw_ack_i     (opw_ack),
+      .opr_we_i      (opr_we),
+      .opr_i         (opr),
       .opr_valid_o   (opr_valid),
-      .rsel_we_i     (1'b0),
-      .rsel_i        (8'h00),
-      .save_we_i     (1'b0),
-      .save_i        (16'h0000),
+      .rsel_we_i     (rsel_we),
+      .rsel_i        (rsel),
+      .rsel_dir_i    (rsel_dir),
+      .save_we_i     (save_we),
+      .save_i        (save_v),
+      .save_xfer_i   (save_xfer),
       .save_req_o    (save_req),
       .restore_req_o (restore_req),
       .restore_word_o(restore_word),
-      .restore_we_i  (1'b0),
-      .restore_i     (16'h0000),
+      .restore_we_i  (restore_we),
+      .restore_i     (restore_v),
+      .restore_xfer_i(restore_xfer),
+      .clear_i       (clear),
       .fpiar_o       (fpiar),
-      .fpiar_we_i    (1'b0),
-      .fpiar_i       (32'h0000_0000),
+      .fpiar_we_i    (fpiar_we),
+      .fpiar_i       (fpiar_v),
       .resp_read_o   (resp_read),
       .rsel_read_o   (rsel_read),
       .save_read_o   (save_read),
@@ -104,9 +116,46 @@ module rd68884_top (
       .pv_o          (pv)
   );
 
-  logic unused_x;
-  assign unused_x = &{1'b1, arch_reset, cmd_pend, cmd_cond, cmd_word, opw_valid,
-                      opw_data, opr_valid, save_req, restore_req, restore_word,
-                      fpiar, resp_read, rsel_read, save_read, abort, pv};
+  rd68884_seq u_seq (
+      .clk           (clk),
+      .rst_n         (rst_n),
+      .arch_reset_i  (arch_reset),
+      .cmd_pend_i    (cmd_pend),
+      .cmd_cond_i    (cmd_cond),
+      .cmd_word_i    (cmd_word),
+      .opw_valid_i   (opw_valid),
+      .opw_data_i    (opw_data),
+      .opr_valid_i   (opr_valid),
+      .save_req_i    (save_req),
+      .restore_req_i (restore_req),
+      .restore_word_i(restore_word),
+      .fpiar_i       (fpiar),
+      .pv_i          (pv),
+      .resp_read_i   (resp_read),
+      .rsel_read_i   (rsel_read),
+      .save_read_i   (save_read),
+      .abort_i       (abort),
+      .resp_we_o     (resp_we),
+      .resp_o        (resp),
+      .resp_oneshot_o(resp_oneshot),
+      .expect_o      (expect_v),
+      .resp_cond_o   (resp_cond),
+      .cmd_ack_o     (cmd_ack),
+      .opw_ack_o     (opw_ack),
+      .opr_we_o      (opr_we),
+      .opr_o         (opr),
+      .rsel_we_o     (rsel_we),
+      .rsel_o        (rsel),
+      .rsel_dir_o    (rsel_dir),
+      .save_we_o     (save_we),
+      .save_o        (save_v),
+      .save_xfer_o   (save_xfer),
+      .restore_we_o  (restore_we),
+      .restore_o     (restore_v),
+      .restore_xfer_o(restore_xfer),
+      .fpiar_we_o    (fpiar_we),
+      .fpiar_o       (fpiar_v),
+      .clear_o       (clear)
+  );
 
 endmodule

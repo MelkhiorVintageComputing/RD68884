@@ -54,7 +54,9 @@ module biu_tb;
   logic [1:0]  dsack_n;
   logic        dsack_oe;
 
-  logic        resp_we = 0, resp_oneshot = 0, cmd_ack = 0, opw_ack = 0;
+  logic        resp_we = 0, resp_oneshot = 0, resp_cond = 0, cmd_ack = 0, opw_ack = 0;
+  logic        rsel_dir = 0, clear = 0;
+  logic [5:0]  save_xfer = 0, restore_xfer = 0;
   logic        opr_we = 0, rsel_we = 0, save_we = 0, restore_we = 0, fpiar_we = 0;
   logic [15:0] resp_v = 0, save_v = 0, restore_v = 0;
   logic [2:0]  expect_v = 0;
@@ -73,15 +75,16 @@ module biu_tb;
       .d_oe(fpu_d_oe), .dsack_n_o(dsack_n), .dsack_oe(dsack_oe),
       .arch_reset_o(arch_reset),
       .resp_we_i(resp_we), .resp_i(resp_v), .resp_oneshot_i(resp_oneshot),
-      .expect_i(expect_v),
+      .expect_i(expect_v), .resp_cond_i(resp_cond),
       .cmd_pend_o(cmd_pend), .cmd_cond_o(cmd_cond), .cmd_word_o(cmd_word),
       .cmd_ack_i(cmd_ack),
       .opw_valid_o(opw_valid), .opw_data_o(opw_data), .opw_ack_i(opw_ack),
       .opr_we_i(opr_we), .opr_i(opr_v), .opr_valid_o(opr_valid),
-      .rsel_we_i(rsel_we), .rsel_i(rsel_v),
-      .save_we_i(save_we), .save_i(save_v), .save_req_o(save_req),
+      .rsel_we_i(rsel_we), .rsel_i(rsel_v), .rsel_dir_i(rsel_dir),
+      .save_we_i(save_we), .save_i(save_v), .save_xfer_i(save_xfer), .save_req_o(save_req),
       .restore_req_o(restore_req), .restore_word_o(restore_word),
       .restore_we_i(restore_we), .restore_i(restore_v),
+      .restore_xfer_i(restore_xfer), .clear_i(clear),
       .fpiar_o(fpiar), .fpiar_we_i(fpiar_we), .fpiar_i(fpiar_v),
       .resp_read_o(resp_read), .rsel_read_o(rsel_read), .save_read_o(save_read),
       .abort_o(abort), .pv_o(pv));
@@ -345,7 +348,7 @@ module biu_tb;
 
   task automatic seq_save(input logic [15:0] v);
     @(posedge clk);
-    save_v <= v; save_we <= 1'b1;
+    save_v <= v; save_xfer <= 6'd0; save_we <= 1'b1;
     @(posedge clk);
     save_we <= 1'b0;
     @(negedge clk);
@@ -353,7 +356,7 @@ module biu_tb;
 
   task automatic seq_restore(input logic [15:0] v);
     @(posedge clk);
-    restore_v <= v; restore_we <= 1'b1;
+    restore_v <= v; restore_xfer <= 6'd0; restore_we <= 1'b1;
     @(posedge clk);
     restore_we <= 1'b0;
     @(negedge clk);
@@ -417,7 +420,8 @@ module biu_tb;
     idle(1);
     check(n_resp_read == n0 + 1, "one resp_read event");
     rd_check(5'h00, 2, 32'h8900, "one-shot reverts to null");
-    check(n_resp_read == n0 + 1, "no event for the null");
+    idle(1);
+    check(n_resp_read == n0 + 2, "every read of the current response is an event");
     // The operand.
     wr(5'h10, 4, 32'h4000_0001);
     idle(1);
@@ -602,7 +606,7 @@ module biu_tb;
     cycle(5'h01, 1'b1, 1, 32'd0, b1);
     check({b0[31:24], b1[31:24]} == 16'h9504, "no tearing");
     idle(1);
-    check(n_resp_read == n0, "no event for a superseded one-shot");
+    check(n_resp_read == n0, "no event for a torn read of a superseded one-shot");
     rd_check(5'h00, 2, 32'h1234, "the new primitive kept");
     seq_resp(16'h0802, 0, E_CMD);
     end
@@ -619,6 +623,77 @@ module biu_tb;
     repeat (4) @(negedge bclk);
     rd_check(5'h00, 2, 32'h0802, "idle after RESET");
     check(fpiar == 0, "FPIAR cleared");
+  endtask
+
+  // M4 additions: the conditional end-of-instruction write, the register
+  // select direction, the frame transfer count, and clear.
+  task automatic seq_resp_cond(input logic [15:0] v);
+    @(posedge clk);
+    resp_v <= v; resp_oneshot <= 1'b0; expect_v <= E_CMD; resp_cond <= 1'b1; resp_we <= 1'b1;
+    @(posedge clk);
+    resp_we <= 1'b0; resp_cond <= 1'b0;
+    @(negedge clk);
+  endtask
+
+  task automatic t_m4();
+    logic [31:0] v;
+    where = "m4";
+    // A command latched before the sequencer's final null keeps its $8900.
+    seq_resp(16'h0900, 0, E_CMD);
+    wr(5'h0A, 2, 32'h0000);
+    seq_resp_cond(16'h0802);
+    rd_check(5'h00, 2, 32'h8900, "conditional null dropped under a command");
+    ack_cmd();
+    seq_resp_cond(16'h0802);
+    rd_check(5'h00, 2, 32'h0802, "conditional null taken when idle");
+    // Register select then operand writes, no sequencer in between.
+    @(posedge clk); rsel_v <= 8'h80; rsel_dir <= 1'b0; rsel_we <= 1'b1;
+    @(posedge clk); rsel_we <= 1'b0;
+    seq_resp(16'h810C, 1, E_RSEL);
+    rd_check(5'h00, 2, 32'h810C, "transfer multiple");
+    rd_check(5'h14, 2, 32'h8000, "register select");
+    wr(5'h10, 4, 32'h1);
+    check(!pv, "operand write right after the register select is expected");
+    ack_opw();
+    seq_resp(16'h0802, 0, E_CMD);
+    // A save frame of three long words.
+    @(posedge clk); save_v <= 16'h1F0C; save_xfer <= 6'd3; save_we <= 1'b1;
+    @(posedge clk); save_we <= 1'b0;
+    rd_check(5'h04, 2, 32'h1F0C, "format word");
+    seq_opr(32'hA);
+    rd_check(5'h10, 4, 32'hA, "frame long word 1");
+    rd_check(5'h04, 2, 32'h0218, "a save during the transfer is invalid");
+    seq_opr(32'hB);
+    rd_check(5'h10, 4, 32'hB, "frame long word 2");
+    seq_opr(32'hC);
+    rd_check(5'h10, 4, 32'hC, "frame long word 3");
+    wr(5'h0A, 2, 32'h0000);
+    idle(1);
+    check(!pv && cmd_pend, "a command expected after the last long word");
+    ack_cmd();
+    seq_resp(16'h0802, 0, E_CMD);
+    // A restore frame of two long words.
+    wr(5'h06, 2, 32'h1F08);
+    @(posedge clk); restore_v <= 16'h1F08; restore_xfer <= 6'd2; restore_we <= 1'b1;
+    @(posedge clk); restore_we <= 1'b0;
+    rd_check(5'h06, 2, 32'h1F08, "restore read-back");
+    wr(5'h10, 4, 32'h1);
+    ack_opw();
+    wr(5'h10, 4, 32'h2);
+    ack_opw();
+    wr(5'h0E, 2, 32'h0001);
+    idle(1);
+    check(!pv && cmd_pend && cmd_cond, "a command expected after the restore frame");
+    ack_cmd();
+    // Clear.
+    wr(5'h10, 4, 32'h0);
+    idle(1);
+    check(pv, "violation");
+    @(posedge clk); clear <= 1'b1;
+    @(posedge clk); clear <= 1'b0;
+    idle(1);
+    check(!pv, "clear");
+    rd_check(5'h00, 2, 32'h0802, "idle after clear");
   endtask
 
   // ==========================================================================
@@ -652,6 +727,7 @@ module biu_tb;
         t_save_restore();
         t_instaddr();
         t_split_read();
+        t_m4();
         t_arch_reset();
       end
     end

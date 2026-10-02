@@ -4,10 +4,10 @@ A SystemVerilog floating-point coprocessor that can stand in for the Motorola MC
 
 It is the companion of [RD68021](https://github.com/MelkhiorVintageComputing/RD68021), a SystemVerilog MC68020.
 
-**Status: milestone 3, the bus interface.**
+**Status: milestone 4, the microsequencer and every dialog.**
 - Milestone 1: the repository, the coding standard, lint, the reset audit and the vendor scripts are in place, and the top level has its final port list. There is no logic behind it yet.
 - Milestone 2: Python golden models of the arithmetic and of the coprocessor interface, written from the manual and checked against TestFloat (`doc/model.md`).
-- Milestone 3: the bus interface unit, for 8-, 16- and 32-bit ports, tested against an MC68020 bus model (`doc/bus-timing.md`). Its sequencer side is still tied off, so a command is answered with "come again" for ever.
+- Milestone 3: the bus interface unit, for 8-, 16- and 32-bit ports, tested against an MC68020 bus model (`doc/bus-timing.md`). - Milestone 4: the microsequencer, its datapath and the dialog microcode, with a micro-assembler and an instruction-set simulator (`doc/microcode.md`). On RD68021, a test program runs every coprocessor dialog: FMOVE.X, FMOVEM, the control registers, every conditional, exceptions, FSAVE/FRESTORE. The arithmetic is still stubbed: those instructions answer F-line until milestone 5.
 
 The design and its milestones are in [`doc/architecture.md`](doc/architecture.md).
 

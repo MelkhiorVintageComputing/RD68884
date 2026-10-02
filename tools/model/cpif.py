@@ -91,6 +91,7 @@ class FPU881:
     def __init__(self, latency=default_latency):
         self.latency = latency
         self.st = A.State()
+        self.log = []                # every CIR access, kept across resets
         self.reset()
 
     # ------------------------------------------------------------------ reset
@@ -109,7 +110,6 @@ class FPU881:
         self.opreg = 0xFFFFFFFF
         self.frame = None            # FSAVE/FRESTORE transfer in progress
         self.restore_readback = None
-        self.log = []
 
     # ------------------------------------------------------------------- time
     def tick(self, n=1):
@@ -239,8 +239,10 @@ class FPU881:
                 self.dialog = Dialog('cond', pred, [('prim', P_BSUN, None)])
                 self.resp = P_BSUN
                 return
+        # The result stays in the response CIR once read (MODEL CHOICE,
+        # doc/model.md): the MC68020 reads it once and moves on.
         prim = P_TRUE if tf else P_FALSE
-        self.dialog = Dialog('cond', pred, [('prim', prim, P_IDLE), ('done',)])
+        self.dialog = None
         self.resp = prim
 
     def _begin_gen(self, cmd):
@@ -564,9 +566,11 @@ class FPU881:
         """FPU figure 6-4, in address order $04..$18."""
         word = d.word if d is not None else 0xFFFF
         e = self.etemp.bits96()
+        # The operand register image is written as ones: its byte-valid flags
+        # (bits 23-20) are all zero, so its contents mean nothing (FPU 6.4.2.2).
         return [(word << 16) | 0xFFFF,
                 (e >> 64) & 0xFFFFFFFF, (e >> 32) & 0xFFFFFFFF, e & 0xFFFFFFFF,
-                self.opreg, self._biu_flags(d)]
+                0xFFFFFFFF, self._biu_flags(d)]
 
     def _busy_frame(self):
         """Opaque (FPU 6.4.2.3): our own layout, see doc/model.md."""

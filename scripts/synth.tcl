@@ -51,4 +51,4 @@ puts [format "SYNTH: LUT %s  FF %s  DSP %s  BRAM %s" \
     [llength [get_cells -hier -quiet -filter {PRIMITIVE_GROUP == LUT}]] \
     [llength [get_cells -hier -quiet -filter {PRIMITIVE_GROUP == FLOP_LATCH}]] \
     [llength [get_cells -hier -quiet -filter {REF_NAME =~ DSP*}]] \
-    [llength [get_cells -hier -quiet -filter {PRIMITIVE_GROUP == BLOCKRAM}]]]
+    [llength [get_cells -hier -quiet -filter {REF_NAME =~ RAMB*}]]]

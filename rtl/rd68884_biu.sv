@@ -80,6 +80,10 @@ module rd68884_biu (
     input  logic [15:0] resp_i,
     input  logic        resp_oneshot_i,
     input  logic [2:0]  expect_i,
+    // With resp_cond_i the write is the end-of-instruction null and is dropped
+    // if a command has been latched meanwhile: its $8900 must not be replaced
+    // by "done" before the sequencer has even seen it.
+    input  logic        resp_cond_i,
 
     // A command or condition word, held until the sequencer takes it.
     output logic        cmd_pend_o,
@@ -99,13 +103,22 @@ module rd68884_biu (
     output logic        opr_valid_o,
 
     // Register select CIR (FPU 7.2.9): the FMOVEM mask.
+    // rsel_dir_i: after the register select read the main processor writes
+    // (0) or reads (1) the registers at once, faster than the sequencer could
+    // change the expectation, so the BIU changes it itself.
     input  logic        rsel_we_i,
     input  logic [7:0]  rsel_i,
+    input  logic        rsel_dir_i,
 
     // Save CIR: the format word to answer with; until one is written a save
     // read answers come-again and raises save_req_o (FPU 6.4.3).
+    // save_xfer_i / restore_xfer_i: the long words of the frame that follows
+    // the format word. The main processor reads or writes them without
+    // reading the response CIR afterwards (FPU 6.4.3, 6.4.4), so the BIU counts
+    // them and expects a command again after the last. 0 for a null frame.
     input  logic        save_we_i,
     input  logic [15:0] save_i,
+    input  logic [5:0]  save_xfer_i,
     output logic        save_req_o,
 
     // Restore CIR: the format word written, and the validation to read back.
@@ -113,6 +126,12 @@ module rd68884_biu (
     output logic [15:0] restore_word_o,
     input  logic        restore_we_i,
     input  logic [15:0] restore_i,
+    input  logic [5:0]  restore_xfer_i,
+
+    // Back to idle after a frame: no violation pending, response $0802,
+    // a command expected (FPU 6.4.3: "the FPCP is in the idle state") --
+    // unless a command has been latched meanwhile, whose $8900 stays.
+    input  logic        clear_i,
 
     // FPIAR lives here: the instruction address CIR writes it (FPU 7.2.10).
     output logic [31:0] fpiar_o,
@@ -120,7 +139,7 @@ module rd68884_biu (
     input  logic [31:0] fpiar_i,
 
     // Events, one clock each.
-    output logic        resp_read_o,     // a one-shot primitive was read
+    output logic        resp_read_o,     // the current response was read
     output logic        rsel_read_o,     // the register select CIR was read
     output logic        save_read_o,     // a prepared format word was read
     output logic        abort_o,         // the control CIR was written
@@ -279,6 +298,10 @@ module rd68884_biu (
   logic [15:0] save_q;
   logic        save_req_q;
   logic        restore_req_q;
+  logic        rsel_dir_q;
+  logic [5:0]  save_xfer_q;
+  logic [5:0]  restore_xfer_q;
+  logic [5:0]  xfer_q;           // frame long words still to transfer
   logic        restore_valid_q;
   logic [15:0] restore_word_q;
   logic [15:0] restore_q;
@@ -306,7 +329,10 @@ module rd68884_biu (
     if (is_resp) begin
       rd_word = {resp_q, 16'hFFFF};
     end else if (is_save) begin
-      rd_word = {(save_valid_q ? save_q : rd68884_pkg::FRAME_COME_AGAIN), 16'hFFFF};
+      // FPU 6.2.8: a save attempted while a frame is being transferred gets
+      // the invalid format word; reading it changes nothing.
+      rd_word = {(xfer_q != 6'd0 ? rd68884_pkg::FRAME_INVALID :
+                  save_valid_q   ? save_q : rd68884_pkg::FRAME_COME_AGAIN), 16'hFFFF};
     end else if (is_rest) begin
       rd_word = {restore_q, 16'hFFFF};
     end else if (is_oper) begin
@@ -391,23 +417,26 @@ module rd68884_biu (
 
   // Events of the completing access.
   logic ev_resp, ev_rsel, ev_save, ev_save_again, ev_abort, ev_cmd, ev_opw;
-  logic ev_opr, ev_rest_w, ev_iar, ev_pv;
+  logic ev_opr, ev_rest_w, ev_rest_r, ev_iar, ev_pv;
+  logic save_ok;
+  assign save_ok = (xfer_q == 6'd0);
   always_comb begin
     ev_resp = 1'b0; ev_rsel = 1'b0; ev_save = 1'b0; ev_save_again = 1'b0;
     ev_abort = 1'b0; ev_cmd = 1'b0; ev_opw = 1'b0; ev_opr = 1'b0;
-    ev_rest_w = 1'b0; ev_iar = 1'b0; ev_pv = 1'b0;
+    ev_rest_w = 1'b0; ev_rest_r = 1'b0; ev_iar = 1'b0; ev_pv = 1'b0;
     if (take && last_part) begin
       if (violation && !pv_q) begin
         ev_pv = 1'b1;
       end else if (!violation && !pv_q) begin
         ev_resp       = is_resp & rd_q;
         ev_rsel       = touches_rsel & rd_q;
-        ev_save       = is_save & rd_q & (first_part ? save_valid_q : hold_save_q);
-        ev_save_again = is_save & rd_q & ~(first_part ? save_valid_q : hold_save_q);
+        ev_save       = save_ok & is_save & rd_q & (first_part ? save_valid_q : hold_save_q);
+        ev_save_again = save_ok & is_save & rd_q & ~(first_part ? save_valid_q : hold_save_q);
         ev_cmd        = (is_cmd | is_cond) & ~rd_q;
         ev_opw        = is_oper & ~rd_q;
         ev_opr        = is_oper & rd_q;
         ev_rest_w     = is_rest & ~rd_q;
+        ev_rest_r     = is_rest & rd_q;
         ev_iar        = is_iar & ~rd_q;
       end
       // FPU 7.2.2: a control write is never illegal, and with a violation
@@ -415,8 +444,8 @@ module rd68884_biu (
       // response read stay legal too (FPU 7.2.1, 7.2.3).
       ev_abort = is_ctrl & ~rd_q;
       if (pv_q) begin
-        ev_save       = is_save & rd_q & (first_part ? save_valid_q : hold_save_q);
-        ev_save_again = is_save & rd_q & ~(first_part ? save_valid_q : hold_save_q);
+        ev_save       = save_ok & is_save & rd_q & (first_part ? save_valid_q : hold_save_q);
+        ev_save_again = save_ok & is_save & rd_q & ~(first_part ? save_valid_q : hold_save_q);
         ev_rest_w     = is_rest & ~rd_q;
         ev_iar        = is_iar & ~rd_q;
       end
@@ -428,7 +457,7 @@ module rd68884_biu (
   logic resp_stale;
   assign resp_stale = ~first_part & resp_dirty_q;
 
-  assign resp_read_o = ev_resp & oneshot_q & ~resp_stale & ~resp_we_i;
+  assign resp_read_o = ev_resp & ~resp_stale & ~resp_we_i;
   assign rsel_read_o = ev_rsel;
   assign save_read_o = ev_save;
   assign abort_o     = ev_abort;
@@ -465,6 +494,10 @@ module rd68884_biu (
       save_q          <= 16'd0;
       save_req_q      <= 1'b0;
       restore_req_q   <= 1'b0;
+      rsel_dir_q      <= 1'b0;
+      save_xfer_q     <= 6'd0;
+      restore_xfer_q  <= 6'd0;
+      xfer_q          <= 6'd0;
       restore_valid_q <= 1'b0;
       restore_word_q  <= 16'd0;
       restore_q       <= 16'hFFFF;
@@ -511,7 +544,7 @@ module rd68884_biu (
       // The sequencer's writes come first in the source and the bus events
       // after them, so that in a clock where both touch a register the bus
       // wins only where it should (see each).
-      if (resp_we_i) begin
+      if (resp_we_i && !(resp_cond_i && (cmd_pend_q || ev_cmd))) begin
         resp_q       <= resp_i;
         oneshot_q    <= resp_oneshot_i;
         resp_dirty_q <= 1'b1;
@@ -540,14 +573,19 @@ module rd68884_biu (
         opr_q       <= opr_i;
         opr_valid_q <= 1'b1;
       end
-      if (rsel_we_i) rsel_q <= rsel_i;
+      if (rsel_we_i) begin
+        rsel_q     <= rsel_i;
+        rsel_dir_q <= rsel_dir_i;
+      end
       if (save_we_i) begin
         save_q       <= save_i;
+        save_xfer_q  <= save_xfer_i;
         save_valid_q <= 1'b1;
         save_req_q   <= 1'b0;
       end
       if (restore_we_i) begin
         restore_q       <= restore_i;
+        restore_xfer_q  <= restore_xfer_i;
         restore_valid_q <= 1'b1;
         restore_req_q   <= 1'b0;
       end
@@ -555,7 +593,7 @@ module rd68884_biu (
 
       // A one-shot primitive becomes null once read, unless the sequencer
       // replaced it in the meantime (FPU 7.4.2.2).
-      if (resp_read_o) begin
+      if (resp_read_o && oneshot_q) begin
         resp_q    <= rd68884_pkg::PRIM_NULL_WAIT;
         oneshot_q <= 1'b0;
         expect_q  <= expect_next_q;
@@ -577,6 +615,26 @@ module rd68884_biu (
       if (ev_opr) begin
         opr_valid_q <= 1'b0;
       end
+      if (ev_rsel) begin
+        expect_q <= rsel_dir_q ? rd68884_pkg::EXP_OPR : rd68884_pkg::EXP_OPW;
+      end
+      // The frame transfer: started by the format word, counted down, and a
+      // command expected again after its last long word.
+      if (ev_save && save_xfer_q != 6'd0) begin
+        expect_q <= rd68884_pkg::EXP_OPR;
+        xfer_q   <= save_xfer_q;
+      end
+      if (ev_rest_r && restore_xfer_q != 6'd0) begin
+        expect_q       <= rd68884_pkg::EXP_OPW;
+        xfer_q         <= restore_xfer_q;
+        restore_xfer_q <= 6'd0;
+      end
+      if ((ev_opw || ev_opr) && xfer_q != 6'd0) begin
+        xfer_q <= xfer_q - 6'd1;
+        if (xfer_q == 6'd1) begin
+          expect_q <= rd68884_pkg::EXP_CMD;
+        end
+      end
       if (ev_save) begin
         save_valid_q <= 1'b0;
       end
@@ -584,9 +642,14 @@ module rd68884_biu (
         save_req_q <= 1'b1;
       end
       if (ev_rest_w) begin
+        // FPU 7.2.4: the restore aborts everything. Until the sequencer has
+        // taken the frame -- and maybe rebuilt a pending instruction's first
+        // primitive -- the response says come again.
         restore_word_q  <= wmerged[31:16];
         restore_req_q   <= 1'b1;
         restore_valid_q <= 1'b0;
+        resp_q          <= rd68884_pkg::PRIM_NULL_WAIT;
+        oneshot_q       <= 1'b0;
       end
       if (ev_iar) begin
         fpiar_q <= wmerged;
@@ -597,6 +660,15 @@ module rd68884_biu (
         pv_q      <= 1'b1;
         resp_q    <= rd68884_pkg::PRIM_PROTOCOL;
         oneshot_q <= 1'b0;
+      end
+      if (clear_i) begin
+        // Like resp_cond_i: a command latched meanwhile keeps its $8900.
+        pv_q <= 1'b0;
+        if (!cmd_pend_q && !ev_cmd) begin
+          resp_q    <= rd68884_pkg::PRIM_NULL_IDLE;
+          oneshot_q <= 1'b0;
+          expect_q  <= rd68884_pkg::EXP_CMD;
+        end
       end
       if (ev_abort || reset_s) begin
         // FPU 7.2.2: terminate, clear pending exceptions (the sequencer's
@@ -612,6 +684,8 @@ module rd68884_biu (
         save_req_q      <= 1'b0;
         restore_req_q   <= 1'b0;
         restore_valid_q <= 1'b0;
+        restore_xfer_q  <= 6'd0;
+        xfer_q          <= 6'd0;
       end
       if (reset_s) begin
         fpiar_q <= 32'd0;                   // FPU 2.4: cleared by reset

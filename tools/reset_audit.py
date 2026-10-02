@@ -67,11 +67,24 @@ UNRESET_FF = {
 # also fails if a name here stops being needed -- an exemption that has quietly
 # become unnecessary is one nobody will re-examine.
 #
-# None yet. The microcode store's read register will be the first (as in
-# RD68021): a block RAM keeps it inside the primitive and cannot give it a reset
-# value on every part, and it is reset-equivalent because its address is forced
-# to the reset entry point while rst_n is low.
-EXEMPT = {}
+# Two, both the read register of a block RAM, which keeps it inside the
+# primitive and cannot give it a reset value on every part (Quartus, given one,
+# builds the memory from logic):
+#
+#   the microcode store's read register (rd68884_ucode_rom.rom_q), one flop per
+#   bit of the microword. Reset-EQUIVALENT: while rst_n is low its address is
+#   forced to the reset entry, so it holds the reset word from the first clock
+#   edge in reset.
+#
+#   the register file's read register (rd68884_regfile.q), 91 bits. Nothing
+#   reads it before the microcode has issued a read, and every entry the
+#   programmer can see is written by the reset microcode first.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                'ucode'))
+import fields  # noqa: E402
+
+EXEMPT = {'the microcode store read register, rd68884_ucode_rom.rom_q': fields.width(),
+          'the register file read register, rd68884_regfile.q': 91}
 
 FORBIDDEN = [
     (re.compile(r'^\s*initial\b'),

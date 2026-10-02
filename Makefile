@@ -38,6 +38,8 @@ GENPKG := $(wildcard rtl/gen/*_pkg.sv)
 GENSRC := $(filter-out $(GENPKG),$(wildcard rtl/gen/*.sv))
 SRCS   := rtl/rd68884_sync.sv \
           rtl/rd68884_biu.sv \
+          rtl/rd68884_regfile.sv \
+          rtl/rd68884_seq.sv \
           rtl/rd68884_top.sv
 
 RTL := $(PKGS) $(GENPKG) $(GENSRC) $(SRCS)
@@ -47,7 +49,7 @@ IVFLAGS := -g2012 -Wall -Wno-timescale
 
 .PHONY: all help dirs lint lint-source lint-iverilog lint-verilator lint-yosys \
         lint-quartus lint-questa synth impl quartus audit check print-rtl clean \
-        oracles model-test testfloat testfloat-full sim
+        oracles model-test testfloat testfloat-full sim ucode ucode-check iss-test sys
 
 all: lint
 
@@ -55,16 +57,23 @@ help:
 	@echo "RD68884 -- SystemVerilog MC68881 floating-point coprocessor"
 	@echo
 	@echo "The gate:"
-	@echo "  make check        lint and audit, together"
+	@echo "  make check        ucode-check, lint, audit, model-test, iss-test, sim"
 	@echo "  make lint         elaborate every rtl module under iverilog, Verilator and yosys"
 	@echo "  make audit        prove no register initialises outside reset"
+	@echo "  make ucode        regenerate rtl/gen/ from tools/ucode/"
+	@echo "  make ucode-check  ... or fail if rtl/gen/ is stale"
 	@echo "  make model-test   the reference models' own tests (tools/model/tests)"
+	@echo "  make iss-test     the microcode, through the ISS, against the golden model"
 	@echo "  make sim          the directed testbenches in sim/tb (iverilog)"
 	@echo
 	@echo "Oracles:"
 	@echo "  make oracles      build SoftFloat and TestFloat into $(BUILD)/oracles"
 	@echo "  make testfloat    the arithmetic model against TestFloat, 3000 vectors a case"
 	@echo "  make testfloat-full  ... every level-1 vector (minutes)"
+	@echo
+	@echo "The system, with RD68021 ($(RD68021)) as the MC68020:"
+	@echo "  make sys          sim/programs/fpu_m4.S on every port width, and the"
+	@echo "                    RTL sequencer against the ISS, clock by clock"
 	@echo
 	@echo "Vendor tools, minutes each:"
 	@echo "  make synth        Vivado synthesis only ($(XPART)), out of context"
@@ -141,6 +150,18 @@ SF    := $(CURDIR)/third_party/berkeley-softfloat-3
 TF    := $(CURDIR)/third_party/berkeley-testfloat-3
 ORA   := $(BUILD)/oracles
 
+# The generated files are committed, so a build needs no Python; ucode-check
+# keeps them honest. build/ucode.json, for the ISS, is written either way.
+ucode: dirs
+	@python3 tools/ucode/asm.py
+
+ucode-check: dirs
+	@python3 tools/ucode/asm.py --check
+
+iss-test: ucode-check
+	@$(PYENV) python3 -m unittest discover -s tools/iss/tests -t tools -q > $(BUILD)/iss-test.log 2>&1 \
+	  && echo "PASS: iss-test" || { tail -30 $(BUILD)/iss-test.log; echo "FAIL: iss-test"; exit 1; }
+
 model-test:
 	@$(PYENV) python3 -m unittest discover -s tools/model/tests -t tools -q 2>&1 | tail -5
 	@$(PYENV) python3 -m unittest discover -s tools/model/tests -t tools -q > /dev/null 2>&1 \
@@ -171,7 +192,7 @@ testfloat-full: oracles
 # ALSO on a missing PASS: a testbench that stopped early without saying so has
 # not passed (the RD68021 rule).
 # ---------------------------------------------------------------------------
-TBS := $(patsubst sim/tb/%.sv,%,$(wildcard sim/tb/*_tb.sv))
+TBS := $(filter-out sys_tb,$(patsubst sim/tb/%.sv,%,$(wildcard sim/tb/*_tb.sv)))
 
 sim: dirs
 	@ok=1; for tb in $(TBS); do \
@@ -188,9 +209,45 @@ sim: dirs
 	done; test $$ok -eq 1 && echo "PASS: sim"
 
 # ---------------------------------------------------------------------------
+# The system -- M4
+#
+# RD68021 is used where it stands (CLAUDE.md: read-only); its RTL list comes
+# from its own Makefile. Not in `check`: it needs that checkout, and minutes.
+# ---------------------------------------------------------------------------
+RD68021 ?= ../RD68021
+CROSS   := m68k-linux-gnu-
+SYSPROGS := fpu_m4
+
+$(BUILD)/programs/%.hex: sim/programs/%.S sim/programs/flat.ld | dirs
+	@mkdir -p $(BUILD)/programs
+	@$(CROSS)as -mcpu=68020 -m68881 -o $(BUILD)/programs/$*.o $<
+	@$(CROSS)ld --no-warn-rwx-segments -T sim/programs/flat.ld -o $(BUILD)/programs/$*.elf $(BUILD)/programs/$*.o
+	@$(CROSS)objcopy -O verilog --verilog-data-width=1 $(BUILD)/programs/$*.elf $@
+
+sys: ucode-check $(patsubst %,$(BUILD)/programs/%.hex,$(SYSPROGS))
+	@test -d $(RD68021) || { echo "FAIL: no RD68021 at $(RD68021)"; exit 1; }
+	@rd="$$(cd $(RD68021) && $(MAKE) -s print-rtl | sed 's#\(\S*\)#$(RD68021)/\1#g')"; \
+	ok=1; for port in 32 16 8; do \
+	  iverilog $(IVFLAGS) -DSYS_PORT=$$port -o $(BUILD)/sys_tb_$$port.vvp -s sys_tb \
+	    $(RTL) $$rd $(RD68021)/sim/models/rd68021_slave.sv sim/tb/sys_tb.sv \
+	    > $(BUILD)/sys_tb_$$port.clog 2>&1 || { grep -v $(NOTES) $(BUILD)/sys_tb_$$port.clog | head; exit 1; }; \
+	  for p in $(SYSPROGS); do \
+	    ls=""; if [ $$port = 32 ]; then ls="+lockstep=$(BUILD)/sys-$$p.lockstep"; fi; \
+	    vvp $(BUILD)/sys_tb_$$port.vvp +image=$(BUILD)/programs/$$p.hex $$ls \
+	      > $(BUILD)/sys-$$p-$$port.log 2>&1; \
+	    if grep -q '^PASS' $(BUILD)/sys-$$p-$$port.log; then \
+	      echo "  $$p, $$port-bit port: $$(grep '^PASS' $(BUILD)/sys-$$p-$$port.log)"; \
+	    else grep -E '^FAIL|sys_tb:' $(BUILD)/sys-$$p-$$port.log; ok=0; fi; \
+	    if [ $$port = 32 ]; then \
+	      $(PYENV) python3 tools/iss/lockstep.py $(BUILD)/sys-$$p.lockstep | sed 's/^/  /' || ok=0; \
+	    fi; \
+	  done; \
+	done; test $$ok -eq 1 && echo "PASS: sys"
+
+# ---------------------------------------------------------------------------
 # The gate
 # ---------------------------------------------------------------------------
-check: lint audit model-test sim
+check: ucode-check lint audit model-test iss-test sim
 	@echo "PASS: check"
 
 # ---------------------------------------------------------------------------
