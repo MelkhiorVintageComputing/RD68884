@@ -10,8 +10,6 @@
 |            (doc/model.md), mh882's $00.
 |   check 46 the idle frame's size: $18, an MC68881's (FPU figure 6-4), where
 |            mh882, an MC68882, has $38.
-|   check 51 needs FLOGN, so it waits for the transcendentals (M7) behind
-|            HAVE_TRANS.
 |
 | Every operand is chosen so that the exact result is representable: any
 | correct MC68881/MC68882 gives the same bits, and the program checks them
@@ -310,11 +308,9 @@ here:   fadd.x  %fp1, %fp1              | exception enabled (MC68881 UM 2.4)
 | ---- SunOS's test for an MC68881 older than the A93N mask (libc's ma93n.o,
 | ---- run by the start-up of every cc -f68881 program), and gradual underflow
 | ---- in the conversions (MC68881 UM 3.3.2, 4.5.1) ---------------------------
-        .ifdef  HAVE_TRANS
         flogn.d tiny, %fp0              | ln(1 + 2^-52), as single: 2^-52
         fmove.s %fp0, %d0
         ck      51, 0x25800000, %d0
-        .endif
         fmove.d tiny+8, %fp0            | 2^-126 (1 - 2^-28) rounds to 2^-126
         fmove.s %fp0, %d0
         ck      52, 0x00800000, %d0

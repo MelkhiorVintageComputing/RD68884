@@ -49,6 +49,7 @@ These are places where the manual is silent or contradicts itself. Each is marke
 | FMOD/FREM with an infinite source or zero FPn | Quotient byte = sign only, zero bits |
 | FMOVE to B/W/L out of range | OPERR alone, no INEX2; saturated result |
 | Packed output with k ≤ 0 | At least 1 and at most 17 significant digits |
+| Transcendental exactness | Exact (no INEX2) only where the result is representable by rule: 2ⁿ, 10ⁿ for 0 ≤ n ≤ 27, log₂ 2^k, log₁₀ 10ⁿ, ln 1, acos 1. By Lindemann's theorem nothing else is exact at a non-zero argument. Until M7 the model guessed from two precisions, which took expm1(−443) for −1 |
 | Packed rounding | The current rounding mode, applied once to the exact value (correctly rounded; the manual allows 0.97/1.47 ulp). The microcode meets the manual's bound and is correctly rounded wherever the result can be exact (doc/microcode.md); the tests compare the two to the bound |
 | FMOVECR at an undocumented offset | +0.0 |
 | FATANH(±1) | DZ and ±∞ with the sign of the source (the manual says the opposite sign; see contradictions) |

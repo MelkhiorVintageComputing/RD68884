@@ -16,6 +16,8 @@ Size is the project's first goal (CLAUDE.md), so every milestone records what it
 
 | M6 FMOD/FREM, FSCALE, FMOVECR, packed decimal | synth | 4763 | 906 | 6 | 11 | WNS +4.53 ns at 20 ns | +432 LUTs: the constant ROM's address and RFQ multiplexer, the digit shifts, the exponent operations; `LOG10`'s product in 2 DSPs; the constant ROM and a microcode store past 1K words in block RAM |
 | M6 | impl | 4744 | 906 | 6 | 11 | 58.1 MHz (17.23 ns) | `make impl`; limited by microword → `A`'s exponent, 31 levels |
+| M7 transcendentals | synth | 5171 | 911 | 6 | 20 | WNS +4.76 ns at 20 ns | +408 LUTs: MULSTEP's capture into B, MULHI, LDM, A_POW2, the 12-bit micro-address, the 2K constant ROM's address. Block RAM: the microcode store is 2744 words of 122 bits, the constant ROM 2K × 92 |
+| M7 | impl | 5341 | 911 | 6 | 20 | 53.7 MHz (18.63 ns) | `make impl`; still above the 50 MHz the core needs, with less margin; limited by microword → `A`'s exponent, 31 levels |
 
 M5 notes:
 - The utilisation-by-hierarchy report puts most of these LUTs in `u_rom`. Vivado has optimised across the ROM's boundary, so its outputs are decoded control rather than the 116 stored bits: the instance has 613 output pins and no flip-flops of its own besides the 3 RAMB36. Only the total is meaningful.

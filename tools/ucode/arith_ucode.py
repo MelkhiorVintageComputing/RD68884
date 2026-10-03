@@ -19,6 +19,7 @@ the sticky bit below A's mantissa; every instruction clears it first.
 
 import crom
 import packed_ucode
+import trans_ucode
 
 # Register-file temporaries (entries 16 and up, doc/microcode.md).
 T_X, T_Y, T_ILOG, T_LEN, T_S, T_HI, T_Q = 16, 17, 18, 19, 20, 21, 22
@@ -33,7 +34,9 @@ OPS = {0x00: 'op_fmove', 0x01: 'op_fint', 0x03: 'op_fintrz', 0x04: 'op_fsqrt',
        0x20: 'op_fdiv', 0x22: 'op_fadd', 0x23: 'op_fmul', 0x24: 'op_fsgldiv',
        0x27: 'op_fsglmul', 0x28: 'op_fsub', 0x38: 'op_fcmp', 0x3A: 'op_ftst',
        0x21: 'op_fmod', 0x25: 'op_frem', 0x26: 'op_fscale'}
+OPS.update(trans_ucode.FUNCS)
 ALIAS = {0x05: 0x04, 0x1B: 0x1A, 0x39: 0x38}
+ALIAS.update(trans_ucode.ALIAS)
 for _c in range(0x29, 0x30):
     ALIAS[_c] = 0x28
 for _c in range(0x3B, 0x40):
@@ -754,3 +757,4 @@ def emit(p):
     p.table('t_outfmt', 3, {0: 'o_l', 1: 'o_s', 2: 'o_x', 3: 'o_p', 4: 'o_w', 5: 'o_d',
                             6: 'o_b', 7: 'o_pd'}, 'fline')
     packed_ucode.emit(p)
+    trans_ucode.emit(p)

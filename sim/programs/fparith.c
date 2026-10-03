@@ -7,8 +7,8 @@
 /*
  * RD68884 -- compiled floating-point code, on RD68021 with RD68884 as its
  * coprocessor (sim/tb/sys_tb.sv). Copied from RD68021's sim/programs/fparith.c
- * and adapted: FPARITH_NO_TRANS leaves out the transcendental functions,
- * which RD68884 does not have before M7.
+ * and adapted: FPARITH_NO_TRANS can leave out the transcendental functions
+ * (RD68884 had none before M7).
  *
  * The same source is the oracle: built for the host, it prints the buffer the
  * FPU should produce. It is built twice, and is C11 both times, so that every

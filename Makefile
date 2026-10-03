@@ -49,7 +49,7 @@ IVFLAGS := -g2012 -Wall -Wno-timescale
 
 .PHONY: all help dirs lint lint-source lint-iverilog lint-verilator lint-yosys \
         lint-quartus lint-questa synth impl quartus audit check print-rtl clean \
-        oracles model-test testfloat testfloat-full iss-testfloat iss-arith sim ucode ucode-check \
+        oracles model-test testfloat testfloat-full iss-testfloat iss-arith iss-trans trans-accuracy sim ucode ucode-check \
         iss-test sys
 
 all: lint
@@ -73,6 +73,8 @@ help:
 	@echo "  make testfloat-full  ... every level-1 vector (minutes)"
 	@echo "  make iss-testfloat   TestFloat through the microcode (the ISS), 300 a case"
 	@echo "  make iss-arith    the microcode against the model, ARITH_N random cases"
+	@echo "  make iss-trans    the transcendentals against the model, TRANS_N cases"
+	@echo "  make trans-accuracy  the transcendentals' error in ulps, against mpmath"
 	@echo
 	@echo "The system, with RD68021 ($(RD68021)) as the MC68020:"
 	@echo "  make sys          sim/programs/fpu_m4.S on every port width, and the"
@@ -192,6 +194,15 @@ testfloat-full: oracles
 iss-testfloat: oracles ucode-check
 	@set -o pipefail; $(PYENV) python3 tools/iss/check_testfloat.py --limit 300 | grep -v ': ok$$'
 
+# The transcendentals against the model (FPU 4.3.2's bound), and how
+# accurate they are, in ulps of extended, against mpmath.
+TRANS_N ?= 3000
+iss-trans: ucode-check
+	@TRANS_N=$(TRANS_N) $(PYENV) python3 -m unittest iss.tests.test_trans \
+	  && echo "PASS: iss-trans, $(TRANS_N) cases"
+trans-accuracy: ucode-check
+	@$(PYENV) python3 tools/iss/trans_accuracy.py 400
+
 # The microcode against the golden model on random operands: ARITH_N cases.
 ARITH_N ?= 20000
 iss-arith: ucode-check
@@ -229,7 +240,7 @@ sim: dirs
 # ---------------------------------------------------------------------------
 RD68021 ?= ../RD68021
 CROSS   := m68k-linux-gnu-
-SYSPROGS  ?= fpu_m4 fpu_m5 fpu_m6 fpu fparith fparith-dbl
+SYSPROGS  ?= fpu_m4 fpu_m5 fpu_m6 fpu_m7 fpu fparith fparith-dbl
 SYS_PORTS ?= 32 16 8
 
 # fpu_m5's and fpu_m6's vectors come from the golden model.
@@ -240,16 +251,21 @@ $(BUILD)/programs/fpu_m6_vec.S: sim/programs/gen_fpu_m6.py sim/programs/gen_fpu_
                                 tools/model/arith.py tools/model/packed.py | dirs
 	@mkdir -p $(BUILD)/programs
 	@$(PYENV):$(CURDIR)/sim/programs python3 sim/programs/gen_fpu_m6.py $@ 120 6
+$(BUILD)/programs/fpu_m7_vec.S: sim/programs/gen_fpu_m7.py sim/programs/gen_fpu_m5.py \
+                                build/ucode.json | dirs
+	@mkdir -p $(BUILD)/programs
+	@$(PYENV):$(CURDIR)/sim/programs python3 sim/programs/gen_fpu_m7.py $@ 100 7
 $(BUILD)/programs/fpu_m5.hex: $(BUILD)/programs/fpu_m5_vec.S sim/programs/arith_harness.inc
 $(BUILD)/programs/fpu_m6.hex: $(BUILD)/programs/fpu_m6_vec.S sim/programs/arith_harness.inc
+$(BUILD)/programs/fpu_m7.hex: $(BUILD)/programs/fpu_m7_vec.S sim/programs/arith_harness.inc
 
 # fparith.c (copied from RD68021), twice: at extended rounding precision
 # against the host's x87, and at double against its SSE (the comment at its
 # top). C11, so that both sides round on every assignment; __builtin_sqrt is
-# FSQRT only when nothing has to set errno. FPARITH_NO_TRANS until M7.
+# FSQRT only when nothing has to set errno.
 CFLAGS68  := -O2 -fno-builtin -fomit-frame-pointer -nostdlib -ffreestanding \
-             -Wall -Wextra -std=c11 -fno-math-errno -DFPARITH_NO_TRANS
-FPARITHCC := -std=c11 -O2 -fno-math-errno -ffp-contract=off -DFPARITH_NO_TRANS
+             -Wall -Wextra -std=c11 -fno-math-errno
+FPARITHCC := -std=c11 -O2 -fno-math-errno -ffp-contract=off
 
 $(BUILD)/programs/crt0.o: sim/programs/crt0.S | dirs
 	@mkdir -p $(BUILD)/programs

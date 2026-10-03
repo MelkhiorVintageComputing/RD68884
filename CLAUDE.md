@@ -110,6 +110,8 @@ make model-test      # the reference models' unit tests (doc/model.md)
 make testfloat       # the arithmetic model against TestFloat (make oracles builds it)
 make iss-arith       # the microcode against the model, ARITH_N random cases
 make iss-testfloat   # TestFloat's vectors through the microcode
+make iss-trans       # the transcendentals against the model, to FPU 4.3.2's bound
+make trans-accuracy  # their error in ulps, against mpmath
 make synth    # Vivado out-of-context synthesis, xc7a35t
 make impl     # Vivado place and route, xc7a35t
 make lint-quartus / make quartus / make lint-questa

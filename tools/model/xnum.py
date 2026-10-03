@@ -137,10 +137,13 @@ def from_frac(num, den, guard_bits=0):
 
 
 def with_sticky(sign, mant, exp, sticky):
-    """mant * 2^exp, with a sticky 1 appended below it when sticky is set."""
+    """mant * 2^exp, with a sticky 1 appended below it when sticky is set:
+    below bit 128 of the significand, so far under any precision's guard bit
+    even when mant itself is short (an inexact result that rounded to 1)."""
     if not sticky:
         return fin(sign, mant, exp)
-    return fin(sign, (mant << 2) | 1, exp - 2)
+    sh = max(2, 130 - mant.bit_length())
+    return fin(sign, (mant << sh) | 1, exp - sh)
 
 
 # -----------------------------------------------------------------------------

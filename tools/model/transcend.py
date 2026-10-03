@@ -40,17 +40,34 @@ def from_mpf(v, exact=False):
     return with_sticky(s, int(man), int(exp), not exact)
 
 
-def _eval(fn, x):
-    """fn at the exact argument, tagged exact when two precisions agree on a
-    short result (ln 1, log2 of a power of two, 2^integer, ...)."""
+def _eval(fn, x, exact=False):
+    """fn at the exact argument, rounded once later. exact says the result is
+    known to be representable (2^n, 10^n, log2 of 2^k, ...): by Lindemann's
+    theorem none of these functions is otherwise exact at a non-zero
+    argument, so the caller says when, rather than precision guessing it
+    (a heuristic that took expm1(-443) for -1)."""
     with mp.workprec(WP):
         a = fn(to_mpf(x))
-    with mp.workprec(WP + 96):
-        b = fn(to_mpf(x))
-    exact = (a == b) and a != 0 and a._mpf_[3] <= 128
-    if a == 0 and b == 0:
+    if a == 0:
         return zero(x.sign)
     return from_mpf(a, exact)
+
+
+def _is_pow10(n):
+    while n > 1 and n % 10 == 0:
+        n //= 10
+    return n == 1
+
+
+def _is_int(x):
+    return x.kind == 'fin' and x.exp >= 0
+
+
+def _pow2_k(x):
+    """k if x = 2^k exactly, else None."""
+    if x.kind == 'fin' and not x.sign and x.mant & (x.mant - 1) == 0:
+        return x.E
+    return None
 
 
 def _const(fn):
@@ -112,7 +129,10 @@ def compute(op, x, res):
         fn = {O['FETOX']: mpmath.exp,
               O['FTWOTOX']: lambda v: mpmath.power(2, v),
               O['FTENTOX']: lambda v: mpmath.power(10, v)}[op]
-        return 'val', _eval(fn, x)
+        # 2^n for an integer n; 10^n for 0 <= n <= 27 (5^27 < 2^64).
+        exact = _is_int(x) and (op == O['FTWOTOX'] or
+                                (op == O['FTENTOX'] and not x.sign and x.mant << x.exp <= 27))
+        return 'val', _eval(fn, x, exact)
     if op == O['FETOXM1']:
         if k == 'zero':
             return 'val', x
@@ -130,7 +150,11 @@ def compute(op, x, res):
             return 'val', x
         fn = {O['FLOGN']: mpmath.ln, O['FLOG10']: mpmath.log10,
               O['FLOG2']: lambda v: mpmath.log(v, 2)}[op]
-        return 'val', _eval(fn, x)
+        # Exact: log2 of 2^k, log10 of 10^n (n >= 0), and ln 1 (= +0).
+        exact = (op == O['FLOG2'] and _pow2_k(x) is not None) or \
+            (op == O['FLOG10'] and _is_int(x) and not x.sign and
+             _is_pow10(x.mant << x.exp))
+        return 'val', _eval(fn, x, exact)
     if op == O['FLOGNP1']:
         if k == 'zero':
             return 'val', x

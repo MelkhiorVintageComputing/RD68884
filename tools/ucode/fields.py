@@ -13,7 +13,7 @@ doc/microcode.md describes what each value does; tools/iss/core.py is the
 executable definition and rtl/rd68884_seq.sv the hardware one.
 """
 
-UADDR_BITS = 11          # 2K words
+UADDR_BITS = 12          # 4K words
 
 FIELDS = [
     # ---- sequencing ----------------------------------------------------------
@@ -44,7 +44,9 @@ FIELDS = [
               'PREC_X', 'SIGN_XOR', 'RM_MODE', 'PREC_SGLX',
               # M6: packed decimal (XI holds the image), the k-factor in
               # MASK[6:0], the quotient's parity in C[0]
-              'P_SPECIAL', 'P_SE', 'K_GT17', 'K_POS', 'Q_ODD']),
+              'P_SPECIAL', 'P_SE', 'K_GT17', 'K_POS', 'Q_ODD',
+              # M7: A's mantissa exactly 1 (a power of two)
+              'A_POW2']),
     ('IDX', ['OPCLASS', 'RX', 'OPMODE']),
     ('TGT', UADDR_BITS),
     ('IMM', 16),
@@ -77,9 +79,11 @@ FIELDS = [
     # RF WRITE: RF[addr] <= A (A as it was at the start of the clock).
     # CROM: RFQ <= the constant ROM (tools/ucode/crom.py) at IMM + an offset:
     # RFA IMM none, CMD the command word's bits 6-0, ELO A's exponent bits
-    # 5-0, EHI its bits 12-6; QSTK <= the entry's sticky bit (0 on a READ).
+    # 5-0, EHI its bits 12-6, EXP its bits 9-0; QSTK <= the entry's sticky
+    # bit (0 on a READ).
     ('RF', ['NONE', 'READ', 'WRITE', 'CROM']),
-    ('RFA', ['IMM', 'RX', 'RY', 'RN', 'ETEMP', 'CTR', 'CMD', 'ELO', 'EHI']),
+    # FPC: the command word's bits 2-0 (FSINCOS's cosine register).
+    ('RFA', ['IMM', 'RX', 'RY', 'RN', 'ETEMP', 'CTR', 'CMD', 'ELO', 'EHI', 'EXP', 'FPC']),
     # A <= RFQ, unpack(XI) in a format, the default NaN, zero, or B (with
     # the sticky bit from its saved copy: B's save and A's restore).
     ('ASRC', ['NONE', 'RFQ', 'UNPACKX', 'NAN', 'ZERO', 'B', 'UNPACKS',
@@ -111,16 +115,16 @@ FIELDS = [
              'ROUND', 'ROUNDX', 'TRUNCA', 'TRUNCB', 'CLRQ', 'CLRAM',
              'MULSTEP', 'MULFIN', 'DIVSTEP', 'DIVFIN', 'SQSTEP', 'SQFIN',
              'EXPF', 'QUIET', 'INFA', 'MAXA', 'ZEROM', 'MUL10', 'ADDDIG',
-             'QINC']),
+             'QINC', 'MULHI']),
     # Exponent and shift-amount operations.
     ('EOP', ['NONE', 'ADDB', 'SUBB', 'ADDI', 'LDI', 'SA_AB', 'SA_IA', 'SA_IMM',
              'SA_EMIN', 'LDEMIN', 'HALF', 'LDB', 'ADDBI', 'NEGE', 'EXP10', 'LOG10',
-             'LDK', 'SUBK']),
+             'LDK', 'SUBK', 'LDM', 'LO6']),
     ('SGN', ['NONE', 'NEG', 'ABS', 'XOR', 'RMZ', 'XI0']),
     # The precision and rounding mode registers every precision-dependent
     # operation reads (PSR: X, S, D or SGLX; RMR: a rounding mode).
     ('PSR', ['NONE', 'FPCR', 'X', 'S', 'D', 'SGLX']),
-    ('RMR', ['NONE', 'FPCR', 'RZ']),
+    ('RMR', ['NONE', 'FPCR', 'RZ', 'RN', 'RM']),
 
     # ---- counters, the FMOVEM mask, flags ---------------------------------------
     ('CTR', ['NONE', 'LOAD', 'DEC', 'LOADE']),
@@ -128,7 +132,8 @@ FIELDS = [
     # register of the list in transfer order (FPU 4.7.1.6), and clear it.
     ('MASK', ['NONE', 'LOAD', 'NEXT']),
     ('FLAG', ['NONE', 'SET_EXC', 'CLR_EXC', 'SET_NULL', 'CLR_NULL', 'BSUN',
-              'RESET', 'PEND_NONE', 'PEND_CMD', 'SET_COND', 'CLR_COND', 'SET_STK']),
+              'RESET', 'PEND_NONE', 'PEND_CMD', 'SET_COND', 'CLR_COND', 'SET_STK',
+              'CLR_STK']),
 ]
 
 

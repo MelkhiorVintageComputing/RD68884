@@ -358,7 +358,7 @@ class Core:
                 'PREC_SGLX': self.psr == P_SGLX,
                 'P_SPECIAL': (self.xi[0] >> 28 & 7) == 7 and (self.xi[0] >> 16 & 0xFFF) == 0xFFF,
                 'P_SE': self.xi[0] >> 30 & 1, 'K_GT17': sext7(self.mask) > 17, 'K_POS': sext7(self.mask) > 0,
-                'Q_ODD': self.c & 1,
+                'Q_ODD': self.c & 1, 'A_POW2': a.mant == 1 << 71,
             }[cond_name]
         cond = int(bool(cond)) ^ F('NEG')
 
@@ -455,13 +455,13 @@ class Core:
         rfop = F('RF')
         if rfop == 'CROM':
             off = {'IMM': 0, 'CMD': cmd & 0x7F, 'ELO': a.exp & 0x3F,
-                   'EHI': (a.exp >> 6) & 0x7F}[F('RFA')]
-            stk, sign, e, m = self.crom[(imm + off) & 0x1FF]
+                   'EHI': (a.exp >> 6) & 0x7F, 'EXP': a.exp & 0x3FF}[F('RFA')]
+            stk, sign, e, m = self.crom[(imm + off) & 0x7FF]
             n_rfq, n_qstk = FP(sign, e, m), stk
         elif rfop != 'NONE':
             ra = F('RFA')
             addr = {'IMM': imm & 0x7F, 'RX': rx, 'RY': cmd >> 7 & 7, 'RN': self.rn,
-                    'ETEMP': ETEMP, 'CTR': self.ctr & 0x7F}[ra]
+                    'ETEMP': ETEMP, 'CTR': self.ctr & 0x7F, 'FPC': cmd & 7}[ra]
             if rfop == 'READ':
                 n_rfq, n_qstk = self.rf[addr].copy(), 0
             else:
@@ -598,7 +598,9 @@ class Core:
             k = bb.mant & 0xFFFF
             n_c = ((self.c >> 16) + a.mant * k) & M88
             n_stk = self.stk | int(self.c & 0xFFFF != 0)
-            n_b.mant = bb.mant >> 16
+            # The 16 bits C drops go into B's top: after five steps
+            # B[71:8] is the low 64 bits of the product (doc/microcode.md).
+            n_b.mant = ((self.c & 0xFFFF) << 56) | (bb.mant >> 16)
         elif mop == 'MULFIN':
             c = self.c
             if c >> 79 & 1:
@@ -659,6 +661,8 @@ class Core:
             n_a.mant = (a.mant * 10) & M72
         elif mop == 'ADDDIG':
             n_a.mant = (a.mant + (xi[0] & 0xF)) & M72
+        elif mop == 'MULHI':
+            n_a.mant = (self.c & ((1 << 64) - 1)) << 8
         elif mop == 'QINC':
             n_c = (self.c & ~0x7F) | ((self.c + 1) & 0x7F)
 
@@ -701,6 +705,11 @@ class Core:
             n_a.exp = sext7(self.mask)
         elif eop == 'SUBK':
             n_a.exp = wrap18(a.exp - sext7(self.mask))
+        elif eop == 'LDM':
+            n = (a.mant >> 8) & 0x3FFFF
+            n_a.exp = wrap18(-n if a.sign else n)
+        elif eop == 'LO6':
+            n_a.exp = a.exp & 0x3F
 
         sg = F('SGN')
         if sg == 'NEG':
@@ -722,8 +731,8 @@ class Core:
         rm = F('RMR')
         if rm == 'FPCR':
             n_rmr = self.fpcr >> 4 & 3
-        elif rm == 'RZ':
-            n_rmr = RZ
+        elif rm in ('RZ', 'RN', 'RM'):
+            n_rmr = {'RZ': RZ, 'RN': RN, 'RM': RM}[rm]
 
         fo = F('FPSR')
         if fo in ('CC', 'CC_CLREXC'):
@@ -778,6 +787,8 @@ class Core:
             n_is_cond = 0
         elif fl == 'SET_STK':
             n_stk = 1
+        elif fl == 'CLR_STK':
+            n_stk = 0
 
         # ---- the next micro-address ----------------------------------------
         seq = F('SEQ')

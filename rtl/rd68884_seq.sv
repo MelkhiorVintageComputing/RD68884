@@ -68,8 +68,8 @@ module rd68884_seq (
   // ==========================================================================
   // The microword
   // ==========================================================================
-  logic [10:0] upc;
-  logic [10:0] addr_nxt;
+  logic [rd68884_ucode_pkg::UA-1:0] upc;
+  logic [rd68884_ucode_pkg::UA-1:0] addr_nxt;
   logic [rd68884_ucode_pkg::UW-1:0] uw;
 
   rd68884_ucode_rom u_rom (
@@ -144,7 +144,7 @@ module rd68884_seq (
   // ==========================================================================
   // State
   // ==========================================================================
-  logic [10:0] stack0, stack1, stack2, stack3;
+  logic [rd68884_ucode_pkg::UA-1:0] stack0, stack1, stack2, stack3;
   logic [1:0]  sp;
   logic [15:0] ctr;
   logic [31:0] t;
@@ -184,7 +184,7 @@ module rd68884_seq (
   // ==========================================================================
   logic restore_rise;
   logic trap;
-  logic [10:0] trap_addr;
+  logic [rd68884_ucode_pkg::UA-1:0] trap_addr;
   always_comb begin
     restore_rise = restore_req_i & ~restore_req_q;
     trap      = arch_reset_i | abort_i | restore_rise;
@@ -716,6 +716,7 @@ module rd68884_seq (
       rd68884_ucode_pkg::COND_K_GT17:     cond_raw = ~mask[6] & (mask[5:0] > 6'd17);
       rd68884_ucode_pkg::COND_K_POS:      cond_raw = ~mask[6] & (mask[5:0] != 6'd0);
       rd68884_ucode_pkg::COND_Q_ODD:      cond_raw = c[0];
+      rd68884_ucode_pkg::COND_A_POW2:     cond_raw = (a_mant == {1'b1, 71'd0});
       default:                            cond_raw = 1'b0;
     endcase
     cond = cond_raw ^ f_neg;
@@ -747,6 +748,7 @@ module rd68884_seq (
       rd68884_ucode_pkg::RFA_RY:    rf_addr = {4'd0, cmd[9:7]};
       rd68884_ucode_pkg::RFA_RN:    rf_addr = {4'd0, rn};
       rd68884_ucode_pkg::RFA_ETEMP: rf_addr = 7'd8;
+      rd68884_ucode_pkg::RFA_FPC:   rf_addr = {4'd0, cmd[2:0]};
       default:                      rf_addr = ctr[6:0];
     endcase
   end
@@ -768,16 +770,17 @@ module rd68884_seq (
   );
 
   // The constant ROM, at IMM + an offset (tools/ucode/fields.py, RF CROM).
-  logic [6:0] cr_off;
-  logic [8:0] cr_addr;
+  logic [9:0]  cr_off;
+  logic [10:0] cr_addr;
   always_comb begin
     case (f_rfa)
-      rd68884_ucode_pkg::RFA_CMD: cr_off = cmd[6:0];
-      rd68884_ucode_pkg::RFA_ELO: cr_off = {1'b0, a_exp[5:0]};
-      rd68884_ucode_pkg::RFA_EHI: cr_off = a_exp[12:6];
-      default:                    cr_off = 7'd0;
+      rd68884_ucode_pkg::RFA_CMD: cr_off = {3'd0, cmd[6:0]};
+      rd68884_ucode_pkg::RFA_ELO: cr_off = {4'd0, a_exp[5:0]};
+      rd68884_ucode_pkg::RFA_EHI: cr_off = {3'd0, a_exp[12:6]};
+      rd68884_ucode_pkg::RFA_EXP: cr_off = a_exp[9:0];
+      default:                    cr_off = 10'd0;
     endcase
-    cr_addr = f_imm[8:0] + {2'd0, cr_off};
+    cr_addr = f_imm[10:0] + {1'b0, cr_off};
   end
 
   logic [91:0] cr_q;
@@ -834,11 +837,11 @@ module rd68884_seq (
   // ==========================================================================
   // The next micro-address
   // ==========================================================================
-  logic [10:0] upc_inc;
-  logic [10:0] seq_nxt;
+  logic [rd68884_ucode_pkg::UA-1:0] upc_inc;
+  logic [rd68884_ucode_pkg::UA-1:0] seq_nxt;
   logic [6:0]  idx;
   always_comb begin
-    upc_inc = upc + 11'd1;
+    upc_inc = upc + 1'b1;
     case (f_idx)
       rd68884_ucode_pkg::IDX_OPCLASS: idx = {4'd0, opclass};
       rd68884_ucode_pkg::IDX_RX:      idx = {4'd0, rx};
@@ -857,7 +860,7 @@ module rd68884_seq (
       end
       rd68884_ucode_pkg::SEQ_BR:   seq_nxt = cond ? f_tgt : upc_inc;
       rd68884_ucode_pkg::SEQ_WAIT: seq_nxt = cond ? upc_inc : upc;
-      rd68884_ucode_pkg::SEQ_DISP: seq_nxt = f_tgt | {4'd0, idx};
+      rd68884_ucode_pkg::SEQ_DISP: seq_nxt = f_tgt | {{(rd68884_ucode_pkg::UA-7){1'b0}}, idx};
       rd68884_ucode_pkg::SEQ_LOOP: seq_nxt = (ctr != 16'd0) ? f_tgt : upc_inc;
       default:                     seq_nxt = upc_inc;
     endcase
@@ -965,11 +968,12 @@ module rd68884_seq (
       rd68884_ucode_pkg::MOP_MULSTEP: begin
         cn = mul_acc;
         stkn = stk | (c[15:0] != 16'd0);
-        bn_mant = {16'd0, b_mant[71:16]};
+        bn_mant = {c[15:0], b_mant[71:16]};    // the dropped bits (doc/microcode.md)
       end
       rd68884_ucode_pkg::MOP_MUL10,
       rd68884_ucode_pkg::MOP_ADDDIG: an_mant = add_s[71:0];
       rd68884_ucode_pkg::MOP_QINC:   cn = {c[87:7], c[6:0] + 7'd1};
+      rd68884_ucode_pkg::MOP_MULHI:  an_mant = {c[63:0], 8'd0};
       rd68884_ucode_pkg::MOP_MULFIN: begin
         if (c[79]) begin
           an_mant = c[79:8];  an_exp = a_exp + 18'd1;  stkn = stk | (c[7:0] != 8'd0);
@@ -1039,6 +1043,8 @@ module rd68884_seq (
       rd68884_ucode_pkg::EOP_LOG10:   an_exp = log10_e;
       rd68884_ucode_pkg::EOP_LDK:     an_exp = {{11{mask[6]}}, mask[6:0]};
       rd68884_ucode_pkg::EOP_SUBK:    an_exp = a_exp - {{11{mask[6]}}, mask[6:0]};
+      rd68884_ucode_pkg::EOP_LDM:     an_exp = a_sign ? (18'd0 - a_mant[25:8]) : a_mant[25:8];
+      rd68884_ucode_pkg::EOP_LO6:     an_exp = {12'd0, a_exp[5:0]};
       default: ;
     endcase
 
@@ -1063,10 +1069,13 @@ module rd68884_seq (
     case (f_rmr)
       rd68884_ucode_pkg::RMR_FPCR: rmrn = fpcr[5:4];
       rd68884_ucode_pkg::RMR_RZ:   rmrn = RZ;
+      rd68884_ucode_pkg::RMR_RN:   rmrn = RN;
+      rd68884_ucode_pkg::RMR_RM:   rmrn = RM;
       default: ;
     endcase
 
     if (f_flag == rd68884_ucode_pkg::FLAG_SET_STK) stkn = 1'b1;
+    if (f_flag == rd68884_ucode_pkg::FLAG_CLR_STK) stkn = 1'b0;
   end
 
   // FPSR: the bus, then the condition codes and the EXC clear, then the flags
@@ -1097,10 +1106,10 @@ module rd68884_seq (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       upc           <= rd68884_ucode_pkg::ENTRY_RESET;
-      stack0        <= 11'd0;
-      stack1        <= 11'd0;
-      stack2        <= 11'd0;
-      stack3        <= 11'd0;
+      stack0        <= '0;
+      stack1        <= '0;
+      stack2        <= '0;
+      stack3        <= '0;
       sp            <= 2'd0;
       ctr           <= 16'd0;
       t             <= 32'd0;

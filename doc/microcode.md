@@ -19,7 +19,7 @@ The four parts and where each is defined:
 | `make iss-arith` | The same random arithmetic cases, `ARITH_N` of them (20,000 by default): operands drawn towards the specials, the ends of each precision's range and the rounding boundaries; every rounding mode, precision and trap enable |
 | `make iss-testfloat` | Berkeley TestFloat's vectors through the microcode, with every dialog, with the skips of `tools/model/check_testfloat.py` |
 | `tools/iss/tests/test_packed.py` (part of `iss-test`; `PACKED_N` cases) | The packed conversions against the exact value: FPU 4.3.3's bound, and INEX1/INEX2 exactly when inexact |
-| `make sys` | On RD68021 with RD68884 as its coprocessor, for 32-, 16- and 8-bit FPU ports: `sim/programs/fpu_m4.S` (the dialogs); `fpu_m5.S` and `fpu_m6.S` (150 and 120 vectors from the golden model, M5's and M6's operations); `fparith.c` (copied from RD68021) bit for bit against the host's x87 and SSE; RD68021's `fpu.S`, adapted (its header lists how) |
+| `make sys` | On RD68021 with RD68884 as its coprocessor, for 32-, 16- and 8-bit FPU ports: `sim/programs/fpu_m4.S` (the dialogs); `fpu_m5.S` and `fpu_m6.S` (150 and 120 vectors from the golden model, M5's and M6's operations); `fpu_m7.S` (100 transcendental vectors from the ISS); `fparith.c` (copied from RD68021) bit for bit against the host's x87 and SSE, and its transcendentals reported in ulps against the host's libm; RD68021's `fpu.S`, adapted (its header lists how) |
 | `tools/iss/lockstep.py` (part of `make sys`) | The RTL sequencer against the ISS, every clock of the 32-bit runs: the recorded BIU signals are replayed into the ISS, and the micro-address and every enabled output must be identical |
 
 ## Timing rules
@@ -73,7 +73,10 @@ Each of these was found by the differential tests. Each needs the BIU, because n
 
 ## The arithmetic
 
-The microcode is `tools/ucode/arith_ucode.py`, for opclasses 000, 010 and 011, and `tools/ucode/packed_ucode.py`, for the packed decimal conversions.
+The microcode is in three files:
+- `tools/ucode/arith_ucode.py`, for opclasses 000, 010 and 011;
+- `tools/ucode/packed_ucode.py`, for the packed decimal conversions;
+- `tools/ucode/trans_ucode.py`, for the transcendentals.
 
 ### Registers
 
@@ -92,11 +95,11 @@ The microcode is `tools/ucode/arith_ucode.py`, for opclasses 000, 010 and 011, a
 
 Every instruction loads `PSR` and `RMR` from the FPCR once, and clears `STK`.
 
-The microcode's register-file temporaries are entries 16 to 22 (`T_X`, `T_Y`, `T_ILOG`, `T_LEN`, `T_S`, `T_HI`, `T_Q`).
+The microcode's register-file temporaries are entries 16 to 22 (`T_X`, `T_Y`, `T_ILOG`, `T_LEN`, `T_S`, `T_HI`, `T_Q`) and, for the transcendentals, 24 to 59.
 
 ### The constant ROM
 
-The constant ROM is `tools/ucode/crom.py`, generated into `rtl/gen/rd68884_crom.sv`. It has 512 entries in the working format, each truncated to 72 bits with a sticky bit for whatever was cut off. Rounding an entry at 64 bits or fewer is therefore the correct rounding of the true constant. `RF CROM` reads it into `RFQ` at `IMM` plus an offset: the command word's bits 6–0 (FMOVECR), or bits 5–0 or 12–6 of `A`'s exponent (the powers of ten).
+The constant ROM is `tools/ucode/crom.py`, generated into `rtl/gen/rd68884_crom.sv`. It has 2048 entries in the working format, each truncated to 72 bits with a sticky bit for whatever was cut off. Rounding an entry at 64 bits or fewer is therefore the correct rounding of the true constant. `RF CROM` reads it into `RFQ` at `IMM` plus an offset: the command word's bits 6–0 (FMOVECR), or bits 5–0, 12–6 or 9–0 of `A`'s exponent (the tables).
 
 | Base | Contents |
 |---|---|
@@ -105,6 +108,8 @@ The constant ROM is `tools/ucode/crom.py`, generated into `rtl/gen/rd68884_crom.
 | `$0C0` | 10^−r, r = 0..63 |
 | `$100` | 10^(64j), j = 0..79 |
 | `$180` | 10^−(64j), j = 0..79 |
+| `$200` | The transcendentals' constants, tables and coefficients, by name (`crom.addr`) |
+| `$600` | 2/π, raw: entry 0 is 0, and entry 1 + j holds bits 64j+1 to 64j+64 after the point in mantissa bits 63–0 |
 
 ### Mantissa operations (`MOP`)
 
@@ -117,7 +122,8 @@ The constant ROM is `tools/ucode/crom.py`, generated into `rtl/gen/rd68884_crom.
 | `RSH1` | If `RX` holds a carry: `A` right by one with the carry in, the exponent up |
 | `ROUND`, `ROUNDX` | Round `A` at the precision's LSB (bit 8, 19 or 48), or at extended's, in `RMR`'s mode; a carry out renormalises; `RINEX` says whether it was inexact |
 | `TRUNCA`, `TRUNCB` | Clear the bits below the precision's LSB (FSGLMUL/FSGLDIV inputs) |
-| `MULSTEP` | `C = C/2¹⁶ + A × B[15:0]`, then `B` right by 16: five steps make the 72 × 72 product, of which `C` keeps the top 80 bits |
+| `MULSTEP` | `C = C/2¹⁶ + A × B[15:0]`, then `B` right by 16 with the 16 bits `C` drops entering at its top. Five steps make the 72 × 72 product: `C` keeps its top 80 bits, and `B[71:8]` its low 64 |
+| `MULHI` | `A = C[63:0]` at mantissa bits 71–8: the high half of an exact 64 × 64 product |
 | `MULFIN` | The product's top 72 bits into `A`, the rest into `STK` |
 | `DIVSTEP` | One restoring-division step: trial-subtract `B` from `{RX, A}`, the quotient bit into `C` |
 | `DIVFIN` | 72 quotient bits into `A`; the rest and a non-zero remainder into `STK` |
@@ -144,7 +150,12 @@ The constant ROM is `tools/ucode/crom.py`, generated into `rtl/gen/rd68884_crom.
 | `SGN` | `XI0` | `A`'s sign = `XI0[31]` (SM) |
 | `FPSR` | `QSIGN`, `QBITS` | The quotient byte: its sign = `A`'s sign xor `B`'s; its seven bits = `C[6:0]` |
 | `CTR` | `LOADE` | `CTR` = `A`'s exponent, for FMOD/FREM's step count |
-| `FLAG` | `SET_STK` | `STK` = 1 |
+| `FLAG` | `SET_STK`, `CLR_STK` | `STK` = 1, or 0 |
+| `EOP` | `LDM` | `A`'s exponent = the signed integer at mantissa bits 25–8 (after a shift to bit 8) |
+| | `LO6` | `A`'s exponent & 63 |
+| `RMR` | `RN`, `RM` | Round to nearest, or down, for the microcode's own integer roundings |
+| `COND` | `A_POW2` | `A`'s mantissa is exactly 1 |
+| `RFA` | `FPC` | The register file at the command word's bits 2–0 (FSINCOS's cosine) |
 
 The `LOG10` constant is accurate to about 2⁻³² relative. That is exact for every exponent of the range: |E| < 2¹⁵, and E·log₁₀2 never comes within 3·10⁻⁵ of an integer there (the convergent 4004/13301 is the closest).
 
@@ -195,6 +206,37 @@ The `LOG10` constant is accurate to about 2⁻³² relative. That is exact for e
 - **The multiplier** is a 72 × 16 product added to `C`/2¹⁶, in DSP48E1 slices. `LOG10`'s 18 × 32 product takes two more.
 - **Branch timing:** one microinstruction per clock, with no delay slot. The M5 checkpoint measures 56.8 MHz after place and route on the xc7a35t-1 (doc/size-and-speed.md), above the 50 MHz the core clock needs.
 
+## The transcendentals (M7)
+
+Every function is computed in the 72-bit working format, truncating, and the result is then rounded by `post` like any other, with `STK` forced on. The internal error is a few units of 2⁻⁷¹. `make trans-accuracy` measures the result against mpmath: no worse than 0.54 ulp of extended at round-to-nearest, close to correctly rounded. FPU 4.3.2 allows 2048 ulp, one ulp of double.
+
+Internal arithmetic is done by subroutines that allow zeros: `mulz`, `addz`, `divz` and `sqrtz`, and `rintn` and `rintm` to round to an integer. Polynomials are Taylor series evaluated by Horner's rule, with the coefficients in the constant ROM.
+
+| Functions | Method |
+|---|---|
+| FETOX, FTWOTOX, FTENTOX | Tang's table method. N = round(x·64/ln 2), and r = x − N·ln2/64 using a two-part constant whose first product is exact. Then 2^(N/64) = 2^M·2^(j/64), with 64 table entries, and e^r − 1 has 7 terms. 2ⁿ for an integer n, and 10ⁿ for an integer 0 ≤ n ≤ 31 (from the constant ROM), are exact cases |
+| FETOXM1 | 15 Taylor terms below 1/4, else e^x − 1 |
+| FSINH, FCOSH, FTANH | From e^x − 1 or e^x: (E + E/(E+1))/2, (e + 1/e)/2, E/(E+2). From \|x\| = 64, e^\|x\|/2 or ±1 |
+| FLOGN, FLOG2, FLOG10 | Tang's table method. x = 2^k·m, F = 1 + j/64, u = (m − F)/F, so ln x = k·ln 2 + ln F + ln(1 + u), with 10 terms. j = 64 moves to the next binade, so that no ln 2 cancels near 1. log₂ of 2^k and log₁₀ of 10ⁿ are exact |
+| FLOGNP1, FATANH | Below 1/16, 2·atanh(z/(2 + z)) with 8 odd terms; else ln(1 + z). atanh x = ln(1 + 2x/(1 − x))/2 |
+| FATAN, FASIN, FACOS | atan y = atan(c) + atan((y − c)/(1 + yc)), with c = round(16y)/16 and 9 terms; π/2 − atan(1/y) above 1. asin x = atan(x/√((1 − x)(1 + x))), and acos x = 2·atan(√((1 − x)/(1 + x))) |
+| FSIN, FCOS, FTAN, FSINCOS | \|x\| is reduced to r in [−π/4, π/4] and a quadrant, then 10 sine or 11 cosine terms are applied and chosen by the quadrant. FTAN is sin/cos. FSINCOS writes the cosine to FPc first, then the sine |
+
+**Argument reduction.** The reduction is exact for every argument:
+- **Below 2²⁰:** Cody and Waite, with π/2 in three parts. N·P1 and N·P2 are exact for N < 2²⁰.
+- **From 2²⁰ up:** Payne and Hanek.
+  1. x = M·2^E. Only four 64-bit chunks of 2/π matter to x·2/π mod 4, from chunk idx = (E + 62) >> 6, and t = ((E + 62) & 63) − 62 places them.
+  2. Each M·G is exact: `MULHI` gives its high half and `B` its low half.
+  3. The words V_i = (L_i + H_(i+1))·2^(t − 64i) are exact sums. With V0 = K + F0, the quadrant is round(K mod 4 + F0 + V1).
+  4. r = (((K mod 4) − n) + F0 + V1 + V2)·π/2, the small terms added last so that their error is relative to r.
+
+  The test arguments include the extended numbers nearest to large multiples of π/2.
+
+**Checks.**
+- `tools/iss/tests/test_trans.py` (`make iss-trans`; 200 cases in `iss-test`) compares with the golden model. It allows FPU 4.3.2's bound on the value and on ETEMP, and INEX2 only where the model is exact. Every other part of the state must match.
+- `sim/programs/fpu_m7.S` runs 100 vectors on RD68021, with expectations from the ISS, which the model holds to the bound.
+- RD68021's `fpu.S` (all 54 checks) and `fparith.c`'s transcendentals are run too.
+
 ## Scope
 
 Implemented:
@@ -207,6 +249,7 @@ Implemented:
 - protocol violations and aborts (in the BIU);
 - FSAVE/FRESTORE of null and idle frames;
 - since M5, the arithmetic of opclasses 000/010/011: FMOVE, FINT, FINTRZ, FSQRT, FABS, FNEG, FGETEXP, FGETMAN, FDIV, FADD, FMUL, FSGLDIV, FSGLMUL, FSUB, FCMP, FTST and their alias opmodes; the B, W, L, S, D and X formats in both directions; every precision and rounding mode; the exceptions and ETEMP;
-- since M6, FMOD, FREM (with the quotient byte), FSCALE, FMOVECR, and the packed decimal format in both directions, with static and dynamic k-factors.
+- since M6, FMOD, FREM (with the quotient byte), FSCALE, FMOVECR, and the packed decimal format in both directions, with static and dynamic k-factors;
+- since M7, every transcendental instruction (FPU table 4-13), with the alias opmodes $07, $0B, $13, $17 and $31–$37.
 
-Not yet: the transcendentals (M7), which answer F-line until then. A save request while operands are part-way through a transfer is not yet serviced: the busy frame is M8.
+Every general instruction of the MC68881 is implemented. A save request while operands are part-way through a transfer is not yet serviced: the busy frame is M8.
