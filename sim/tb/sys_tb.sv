@@ -23,6 +23,9 @@
 //   RES+$84  write an address: the next data access to it gets a bus error
 //            (once); the processor's RTE runs it again
 //
+// and one lets it time itself (make cycles, doc/timing-divergences.md):
+//   RES+$88  read: CPU clocks since reset, rewritten on every rising edge
+//
 // +lockstep=FILE writes, every FPU clock, what the BIU drove into the
 // sequencer and what the sequencer drove back, for tools/iss/lockstep.py to
 // replay on the ISS (doc/microcode.md).
@@ -185,8 +188,46 @@ module sys_tb;
     end
   end
 
+  // RES+$88: the clock count. The memory model holds it, so a read of it is an
+  // ordinary memory cycle that returns the count as it was on that cycle.
+  int unsigned clocks;
+  always @(posedge clk) begin
+    if (!rst_n) clocks <= 0;
+    else begin
+      clocks <= clocks + 1;
+      {s32.mem[RES + 32'h88], s32.mem[RES + 32'h89], s32.mem[RES + 32'h8A], s32.mem[RES + 32'h8B]} <= clocks;
+    end
+  end
+
   // DSACK with the board's pull-ups; none for the faulted access.
   assign dsack_n_i = fault_now ? 2'b11 : (dsack32 & (fpu_dsack_oe ? fpu_dsack_n : 2'b11));
+
+  // ---- +trace: every bus cycle the processor makes, as it ends ------------------
+  // The clock counts at AS asserted and negated, FC, the address, R or W, SIZ
+  // and the data on the bus when DSACK (or BERR) ended it -- for reading a
+  // row of make cycles.
+  logic trace, as_q, ended;
+  logic [31:0] tr_d;
+  int unsigned tr_start;
+  initial trace = $test$plusargs("trace");
+  always @(posedge clk) begin
+    if (!rst_n) begin
+      as_q <= 1'b1; ended <= 1'b0; tr_d <= 32'd0; tr_start <= 0;
+    end else begin
+      as_q <= as_n_o;
+      if (!as_n_o && as_q) tr_start <= clocks;
+      if (!as_n_o && (dsack_n_i != 2'b11 || !berr_n || !avec_n)) begin
+        ended <= 1'b1;
+        tr_d  <= dbus;
+      end
+      if (as_n_o && !as_q) begin
+        ended <= 1'b0;
+        if (trace)
+          $display("trace %0d-%0d fc %0d a %08h %s siz %0d d %08h%s", tr_start, clocks, fc_o, a_o,
+                   rw_o ? "R" : "W", siz_o, tr_d, ended ? "" : " (no end)");
+      end
+    end
+  end
 
   // ---- lockstep recording ----------------------------------------------------------
   integer ls;

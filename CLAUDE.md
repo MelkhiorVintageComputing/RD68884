@@ -97,6 +97,7 @@ Project documents:
 | `doc/microcode.md` | The microcode machine: fields, timing rules, traps, the races the BIU settles |
 | `doc/model.md` | The Python reference models, how they are checked, and every choice they make where the manual is silent |
 | `doc/system.md` | SunOS 4.1.1 in TME with RD68021 and RD68884 (`make sunos`) |
+| `doc/timing-divergences.md` | Clock counts against FPU section 8, and why each differs (`make cycles`) |
 
 ## Building and checking
 
@@ -107,6 +108,7 @@ make check    # the gate: ucode-check, lint, audit, model-test, iss-test, sim
 make sim      # the directed testbenches in sim/tb
 make ucode    # regenerate rtl/gen/ from tools/ucode/ (ucode-check is part of check)
 make sys      # the system with RD68021 as the MC68020, and the RTL/ISS lockstep
+make cycles   # clock counts against FPU section 8; FREEZE=1 accepts a change
 make sunos    # SunOS 4.1.1 in TME on RD68021 + RD68884, against TME's m68020/MC68881 (~15 min)
 make model-test      # the reference models' unit tests (doc/model.md)
 make testfloat       # the arithmetic model against TestFloat (make oracles builds it)

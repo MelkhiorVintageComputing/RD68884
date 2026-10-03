@@ -50,7 +50,7 @@ IVFLAGS := -g2012 -Wall -Wno-timescale
 .PHONY: all help dirs lint lint-source lint-iverilog lint-verilator lint-yosys \
         lint-quartus lint-questa synth impl quartus audit check print-rtl clean \
         oracles model-test testfloat testfloat-full iss-testfloat iss-arith iss-trans trans-accuracy sim ucode ucode-check \
-        iss-test rd68021 sys tme sunos
+        iss-test rd68021 sys cycles tme sunos
 
 all: lint
 
@@ -77,8 +77,11 @@ help:
 	@echo "  make trans-accuracy  the transcendentals' error in ulps, against mpmath"
 	@echo
 	@echo "The system, with RD68021 ($(RD68021) at $(RD68021_REV)) as the MC68020:"
-	@echo "  make sys          sim/programs/fpu_m4.S on every port width, and the"
+	@echo "  make sys          the programs in SYSPROGS on every port width, and the"
 	@echo "                    RTL sequencer against the ISS, clock by clock"
+	@echo "  make cycles       clock counts against FPU section 8 (FREEZE=1 to accept)"
+	@echo "  make tme          TME with RD68021 + RD68884 as a CPU element"
+	@echo "  make sunos        SunOS 4.1.1 on it, against TME's m68020/MC68881"
 	@echo
 	@echo "Vendor tools, minutes each:"
 	@echo "  make synth        Vivado synthesis only ($(XPART)), out of context"
@@ -337,6 +340,35 @@ sys: ucode-check rd68021 $(patsubst %,$(BUILD)/programs/%.hex,$(SYSPROGS))
 	    fi; \
 	  done; \
 	done; test $$ok -eq 1 && echo "PASS: sys"
+
+# ---------------------------------------------------------------------------
+# Clock counts against FPU section 8 -- doc/timing-divergences.md
+#
+# tools/cycles.py writes a program that times every instruction with sys_tb's
+# clock count (32-bit port), and it runs twice: at the design's clocks (the
+# FPU's core three times the bus clock) and with the FPU's core thirty times
+# as fast, where what is left is the main processor and the protocol. Every
+# row's count is frozen in tools/cycles.frozen; a change either way fails
+# until it is looked at and frozen again (FREEZE=1). The table in the doc is
+# regenerated from the measurement.
+# ---------------------------------------------------------------------------
+cycles: ucode-check rd68021
+	@mkdir -p $(BUILD)/programs
+	@python3 tools/cycles.py gen $(BUILD)/programs/cycles.S
+	@$(CROSS)as -mcpu=68020 -m68881 -o $(BUILD)/programs/cycles.o $(BUILD)/programs/cycles.S
+	@$(CROSS)ld --no-warn-rwx-segments -T sim/programs/flat.ld -o $(BUILD)/programs/cycles.elf $(BUILD)/programs/cycles.o
+	@$(CROSS)objcopy -O verilog --verilog-data-width=1 $(BUILD)/programs/cycles.elf $(BUILD)/programs/cycles.hex
+	@rd="$$(cd $(RDSRC) && $(MAKE) -s print-rtl | sed 's#\(\S*\)#$(RDSRC)/\1#g')"; \
+	  iverilog $(IVFLAGS) -DSYS_PORT=32 -o $(BUILD)/sys_tb_32.vvp -s sys_tb \
+	    $(RTL) $$rd $(RDSRC)/sim/models/rd68021_slave.sv sim/tb/sys_tb.sv \
+	    > $(BUILD)/sys_tb_32.clog 2>&1 || { grep -v $(NOTES) $(BUILD)/sys_tb_32.clog | head; exit 1; }
+	@for r in 20:cycles 2:cycles-fast; do \
+	  vvp $(BUILD)/sys_tb_32.vvp +image=$(BUILD)/programs/cycles.hex +limit=4000000 \
+	    +fpu_ns=$${r%%:*} +dump=$(BUILD)/$${r#*:}.dump > $(BUILD)/$${r#*:}.log 2>&1; \
+	  grep -q '^PASS' $(BUILD)/$${r#*:}.log || { tail -3 $(BUILD)/$${r#*:}.log; exit 1; }; \
+	done
+	@$(PYENV) python3 tools/cycles.py check $(BUILD)/cycles.dump $(BUILD)/cycles-fast.dump \
+	  --doc doc/timing-divergences.md $(if $(FREEZE),--freeze)
 
 # ---------------------------------------------------------------------------
 # SunOS 4.1.1 with RD68884 as the FPU -- doc/system.md (M9)
