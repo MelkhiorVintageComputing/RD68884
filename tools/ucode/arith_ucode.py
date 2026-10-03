@@ -21,6 +21,7 @@ import crom
 import packed_ucode
 import trans_ucode
 from arith_ucode_cmp import mag_cmp
+from busy import bwait, opw_replay, opr_replay
 
 # Register-file temporaries (entries 16 and up, doc/microcode.md).
 T_X, T_Y, T_ILOG, T_LEN, T_S, T_HI, T_Q = 16, 17, 18, 19, 20, 21, 22
@@ -81,7 +82,7 @@ def emit(p):
           comment='evaluate <ea> and transfer data')
         u(SEQ='CALL', TGT='wait_first')
         for k in range(nl):
-            u(SEQ='WAIT', COND='OPW_VALID')
+            bwait(p, 'OPW_VALID', False, opw_replay())
             u(BIU='OPW_ACK', TSRC='OPW', TDST=f'XI{k}')
         if unpack is None:
             u(RESP='WR', IMM=0x0900, EXPECT='CMD', SEQ='JUMP', TGT='pin', comment='release')
@@ -686,11 +687,11 @@ def emit(p):
         u(ASRC='RFQ', SEQ='JUMP', TGT=f'o_{fmt}_go')
     # The dynamic k-factor: the MPU sends Dn first (FPU table 7-5).
     L('o_pd')
-    u(RESP='WR', IMM=0x8C00, ORS='DNPC', ONESHOT=1, EXPECT='OPW', RF='READ', RFA='RY',
+    u(RESP='WR', IMM=0x8C00, ORS='DNPC', ONESHOT=1, EXPECT='OPW',
       PSR='X', RMR='FPCR', FPSR='CLREXC', MOP='CLRQ', comment='transfer Dn')
     u(SEQ='CALL', TGT='wait_first')
-    u(SEQ='WAIT', COND='OPW_VALID')
-    u(BIU='OPW_ACK', TSRC='OPW', TDST='MASK', comment='the k-factor')
+    bwait(p, 'OPW_VALID', False, opw_replay())
+    u(BIU='OPW_ACK', TSRC='OPW', TDST='MASK', RF='READ', RFA='RY', comment='the k-factor')
     u(ASRC='RFQ', SEQ='JUMP', TGT='o_p_go')
 
     # ---- extended: exact, a denormal signals UNFL --------------------------
@@ -752,23 +753,35 @@ def emit(p):
         u(EXCSET=OPERR, XOP='PACKNI', SEQ='JUMP', TGT=out)
 
     # ---- transfer, then the final primitive ---------------------------------
+    # The first wait may see a save request before the primitive was read
+    # (an interrupt while polling, FPU 7.5.4.3): then it is written again.
+    def first_out_wait(prim):
+        def replay(w):
+            r = w + '_r'
+            u(SEQ='BR', COND='RESP_READ', TGT=r)
+            u(RESP='WR', IMM=prim, ONESHOT=1, EXPECT='OPR', TSRC='XI0', BIU='OPR_WR',
+              SEQ='JUMP', TGT=w, comment='not read yet: the primitive again')
+            L(r)
+            u(RESP='WR', IMM=0x8900, EXPECT='OPR', TSRC='XI0', BIU='OPR_WR',
+              SEQ='JUMP', TGT=w)
+        bwait(p, 'OPR_VALID', True, replay)
     for name, prim in (('out_1', 0xB104), ('out_w', 0xB102), ('out_b', 0xB101)):
         L(name)
         u(RESP='WR', IMM=prim, ONESHOT=1, EXPECT='OPR', TSRC='XI0', BIU='OPR_WR')
-        u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
+        first_out_wait(prim)
         u(SEQ='JUMP', TGT='out_end')
     L('out_d')
     u(RESP='WR', IMM=0xB208, ONESHOT=1, EXPECT='OPR', TSRC='XI0', BIU='OPR_WR')
-    u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
+    first_out_wait(0xB208)
     u(TSRC='XI1', BIU='OPR_WR')
-    u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
+    bwait(p, 'OPR_VALID', True, opr_replay('XI1'))
     u(SEQ='JUMP', TGT='out_end')
     L('out_x')
     u(RESP='WR', IMM=0xB20C, ONESHOT=1, EXPECT='OPR', TSRC='XI0', BIU='OPR_WR')
-    u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
+    first_out_wait(0xB20C)
     for k in (1, 2):
         u(TSRC=f'XI{k}', BIU='OPR_WR')
-        u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
+        bwait(p, 'OPR_VALID', True, opr_replay(f'XI{k}'))
     # FPU 7.5.4.2: an enabled exception is reported here, mid-instruction.
     L('out_end')
     u(FPSR='ACCRUE')

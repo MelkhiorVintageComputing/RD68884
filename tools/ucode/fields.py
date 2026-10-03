@@ -46,7 +46,9 @@ FIELDS = [
               # MASK[6:0], the quotient's parity in C[0]
               'P_SPECIAL', 'P_SE', 'K_GT17', 'K_POS', 'Q_ODD',
               # M7: A's mantissa exactly 1 (a power of two)
-              'A_POW2']),
+              'A_POW2',
+              # M8: the restore word is a busy frame's
+              'REST_BUSY']),
     ('IDX', ['OPCLASS', 'RX', 'OPMODE']),
     ('TGT', UADDR_BITS),
     ('IMM', 16),
@@ -69,10 +71,13 @@ FIELDS = [
 
     # ---- the 32-bit transfer bus ---------------------------------------------
     # TBUS = TSRC; T <= TBUS; TDST <= TBUS, all in the same clock.
+    # SEQST, for a busy frame (doc/microcode.md): {the return stack's top
+    # (12), MASK (8), RN (3), IS_COND, EXC_PEND, the RESP_READ and RSEL_READ
+    # events, 0000}. As TDST it pushes the address and loads the rest.
     ('TSRC', ['T', 'OPW', 'IMM', 'FPCR', 'FPSR', 'FPIAR', 'CMDW', 'XI0', 'XI1',
-              'XI2', 'FLAGS', 'RESTW', 'ONES']),
+              'XI2', 'FLAGS', 'RESTW', 'ONES', 'SEQST']),
     ('TDST', ['NONE', 'FPCR', 'FPSR', 'MASK', 'XI0', 'XI1', 'XI2', 'CMD',
-              'FLAGS']),
+              'FLAGS', 'SEQST']),
 
     # ---- the floating-point registers -------------------------------------------
     # RF READ: RFQ <= RF[addr] (available to the next microinstruction).

@@ -20,6 +20,7 @@ Size is the project's first goal (CLAUDE.md), so every milestone records what it
 | M7 | impl | 5341 | 911 | 6 | 20 | 53.7 MHz (18.63 ns) | `make impl`; still above the 50 MHz the core needs, with less margin; limited by microword → `A`'s exponent, 31 levels |
 | M7 size pass | synth | 4380 | 911 | 6 | 20 | WNS +5.31 ns at 20 ns | −791 LUTs, see below |
 | M7 size pass | impl | 4363 | 911 | 6 | 20 | 54.5 MHz (18.35 ns) | limited by microword → `A`'s exponent, 34 levels |
+| M8 busy frames | synth | 4441 | 915 | 6 | 21 | WNS +5.69 ns at 20 ns | +61 LUTs: `SEQST` (the return stack's top into TBUS, and the push), `REST_BUSY`; 3128 microcode words |
 
 M5 notes:
 - The utilisation-by-hierarchy report puts most of these LUTs in `u_rom`. Vivado has optimised across the ROM's boundary, so its outputs are decoded control rather than the 116 stored bits: the instance has 613 output pins and no flip-flops of its own besides the 3 RAMB36. Only the total is meaningful.

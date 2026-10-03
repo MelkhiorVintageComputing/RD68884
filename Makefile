@@ -240,7 +240,7 @@ sim: dirs
 # ---------------------------------------------------------------------------
 RD68021 ?= ../RD68021
 CROSS   := m68k-linux-gnu-
-SYSPROGS  ?= fpu_m4 fpu_m5 fpu_m6 fpu_m7 fpu fparith fparith-dbl
+SYSPROGS  ?= fpu_m4 fpu_m5 fpu_m6 fpu_m7 fpu_m8 fpu fparith fparith-dbl
 SYS_PORTS ?= 32 16 8
 
 # fpu_m5's and fpu_m6's vectors come from the golden model.

@@ -95,3 +95,5 @@ On FRESTORE, a pending instruction is restarted from its command word, so the ma
 | 10 onward | The buffered long words, then `$FFFFFFFF` padding |
 
 **While a computation runs**, FSAVE answers come-again until it finishes, then saves an idle frame.
+
+The microcode's busy frame has its own layout (doc/microcode.md); the frame is opaque, so the two are compared by what they do, not by their bytes (`tools/iss/tests/test_busy.py`).

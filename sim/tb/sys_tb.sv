@@ -15,6 +15,13 @@
 // The program is the check (sim/programs/fpu_m4.S): it fills a results block
 // and sets 'DONE'; this waits for that and reports it.
 //
+// Two testbench registers let a program provoke the exceptions that make
+// an FSAVE land in the middle of a coprocessor dialog (M8):
+//   RES+$80  write N: N CPU clocks later, an interrupt at level 2,
+//            autovectored, held until acknowledged
+//   RES+$84  write an address: the next data access to it gets a bus error
+//            (once); the processor's RTE runs it again
+//
 // +lockstep=FILE writes, every FPU clock, what the BIU drove into the
 // sequencer and what the sequencer drove back, for tools/iss/lockstep.py to
 // replay on the ISS (doc/microcode.md).
@@ -61,6 +68,9 @@ module sys_tb;
   wire [31:0] dbus;
   assign dbus = d_oe ? d_o : 32'bz;
 
+  logic  [2:0] ipl_n;
+  logic        avec_n, berr_n;
+
   rd68021_top #(.ICACHE_ENTRIES (64), .COPROCESSOR (1'b1)) cpu (
       .clk (clk), .rst_n (rst_n),
       .fc_o (fc_o), .fc_oe (fc_oe), .a_o (a_o), .a_oe (a_oe),
@@ -69,8 +79,8 @@ module sys_tb;
       .rw_o (rw_o), .rw_oe (rw_oe), .rmc_n_o (rmc_n_o), .rmc_oe (rmc_oe),
       .as_n_o (as_n_o), .as_oe (as_oe), .ds_n_o (ds_n_o), .ds_oe (ds_oe),
       .dben_o (dben_o), .dben_oe (dben_oe), .dsack_n_i (dsack_n_i),
-      .ipl_n_i (3'b111), .ipend_n_o (ipend_n_o), .avec_n_i (1'b1),
-      .br_n_i (1'b1), .bg_n_o (bg_n_o), .bgack_n_i (1'b1), .berr_n_i (1'b1),
+      .ipl_n_i (ipl_n), .ipend_n_o (ipend_n_o), .avec_n_i (avec_n),
+      .br_n_i (1'b1), .bg_n_o (bg_n_o), .bgack_n_i (1'b1), .berr_n_i (berr_n),
       .reset_n_i (1'b1), .reset_n_o (reset_n_o), .reset_n_oe (reset_n_oe),
       .halt_n_i (1'b1), .halt_n_o (halt_n_o), .halt_n_oe (halt_n_oe),
       .cdis_n_i (1'b1));
@@ -127,8 +137,55 @@ module sys_tb;
       .d_i (fpu_d_i), .d_o (fpu_d_o), .d_oe (fpu_d_oe),
       .dsack_n_o (fpu_dsack_n), .dsack_oe (fpu_dsack_oe));
 
-  // DSACK with the board's pull-ups.
-  assign dsack_n_i = dsack32 & (fpu_dsack_oe ? fpu_dsack_n : 2'b11);
+  function automatic logic [31:0] peek(input int unsigned a);
+    peek = {s32.mem[a], s32.mem[a+1], s32.mem[a+2], s32.mem[a+3]};
+  endfunction
+
+  // ---- the exception injectors (RES+$80, RES+$84) -------------------------------------
+  int unsigned irq_count;
+  logic        irq_on, irq_ack, fault_on, fault_now, fault_hit;
+  logic [31:0] fault_addr;
+  // An interrupt acknowledge: FC = 7, A19-A16 = $F (UM 5.4.1).
+  logic        iack;
+  assign iack = !as_n_o && fc_o == 3'd7 && a_o[19:16] == 4'hF;
+  assign ipl_n  = irq_on ? 3'b101 : 3'b111;
+  assign avec_n = !(iack && irq_on);
+  // The faulted access: a data access to the address, while AS is asserted.
+  assign fault_now = fault_on && !as_n_o && (fc_o == 3'd1 || fc_o == 3'd5) && a_o == fault_addr;
+  assign berr_n = !fault_now;
+
+  always @(posedge clk) begin
+    if (!rst_n) begin
+      irq_count <= 0; irq_on <= 1'b0; irq_ack <= 1'b0; fault_on <= 1'b0; fault_hit <= 1'b0; fault_addr <= 32'd0;
+    end else begin
+      if (peek(RES + 32'h80) != 0) begin
+        irq_count <= peek(RES + 32'h80);
+        {s32.mem[RES + 32'h80], s32.mem[RES + 32'h81], s32.mem[RES + 32'h82], s32.mem[RES + 32'h83]} <= 32'd0;
+      end else if (irq_count != 0) begin
+        irq_count <= irq_count - 1;
+        if (irq_count == 1) irq_on <= 1'b1;
+      end
+      // Withdrawn once the acknowledge cycle it answered is over.
+      if (iack && irq_on) irq_ack <= 1'b1;
+      if (irq_ack && as_n_o) begin
+        irq_on  <= 1'b0;
+        irq_ack <= 1'b0;
+      end
+      if (peek(RES + 32'h84) != 0) begin
+        fault_addr <= peek(RES + 32'h84);
+        fault_on   <= 1'b1;
+        {s32.mem[RES + 32'h84], s32.mem[RES + 32'h85], s32.mem[RES + 32'h86], s32.mem[RES + 32'h87]} <= 32'd0;
+      end else if (fault_now) begin
+        fault_hit <= 1'b1;
+      end else if (fault_hit && as_n_o) begin
+        fault_on  <= 1'b0;                     // once, when that cycle is over
+        fault_hit <= 1'b0;
+      end
+    end
+  end
+
+  // DSACK with the board's pull-ups; none for the faulted access.
+  assign dsack_n_i = fault_now ? 2'b11 : (dsack32 & (fpu_dsack_oe ? fpu_dsack_n : 2'b11));
 
   // ---- lockstep recording ----------------------------------------------------------
   integer ls;
@@ -154,9 +211,6 @@ module sys_tb;
   end
 
   // ---- the run ----------------------------------------------------------------------
-  function automatic logic [31:0] peek(input int unsigned a);
-    peek = {s32.mem[a], s32.mem[a+1], s32.mem[a+2], s32.mem[a+3]};
-  endfunction
 
   string       image, dump;
   int unsigned n, limit, k;

@@ -193,6 +193,16 @@ module rd68884_seq (
                                rd68884_ucode_pkg::ENTRY_RESTORE;
   end
 
+  logic [rd68884_ucode_pkg::UA-1:0] stack_top;
+  always_comb begin
+    case (sp - 2'd1)
+      2'd0:    stack_top = stack0;
+      2'd1:    stack_top = stack1;
+      2'd2:    stack_top = stack2;
+      default: stack_top = stack3;
+    endcase
+  end
+
   logic ev_resp, ev_rsel, ev_save;
   assign ev_resp = ev_resp_q | resp_read_i;
   assign ev_rsel = ev_rsel_q | rsel_read_i;
@@ -283,6 +293,9 @@ module rd68884_seq (
       // FPU figure 6-6 / table 6-4: the BIU flags of the idle frame.
       rd68884_ucode_pkg::TSRC_FLAGS: tbus = {pv_i, frame_code, ~exc_pend, 1'b1, 10'd0, 16'hFFFF};
       rd68884_ucode_pkg::TSRC_RESTW: tbus = {16'd0, restore_word_i};
+      // A busy frame's sequencer word (doc/microcode.md).
+      rd68884_ucode_pkg::TSRC_SEQST: tbus = {stack_top, mask, rn, is_cond, exc_pend,
+                                             ev_resp, ev_rsel, 5'd0};
       default:                       tbus = 32'hFFFF_FFFF;
     endcase
   end
@@ -653,6 +666,7 @@ module rd68884_seq (
       rd68884_ucode_pkg::COND_BSUN_EN:    cond_raw = fpcr[15];
       rd68884_ucode_pkg::COND_REST_NULL:  cond_raw = (restore_word_i[15:8] == 8'h00);
       rd68884_ucode_pkg::COND_REST_IDLE:  cond_raw = (restore_word_i == rd68884_pkg::FRAME_IDLE);
+      rd68884_ucode_pkg::COND_REST_BUSY:  cond_raw = (restore_word_i == rd68884_pkg::FRAME_BUSY);
       rd68884_ucode_pkg::COND_FLINE:      cond_raw = (opclass == 3'd1) |
                                                      (((opclass == 3'd0) | ((opclass == 3'd2) & (rx != 3'd7))) & cmd[6]);
       rd68884_ucode_pkg::COND_REPORTS:    cond_raw = (opclass == 3'd0) | (opclass == 3'd2) | (opclass == 3'd3);
@@ -1127,6 +1141,10 @@ module rd68884_seq (
         // The sticky events, re-armed by the action that awaits the next.
         ev_resp_q <= ev_resp & (f_resp == rd68884_ucode_pkg::RESP_NONE);
         ev_rsel_q <= ev_rsel & (f_biu != rd68884_ucode_pkg::BIU_RSEL_WR);
+        if (f_tdst == rd68884_ucode_pkg::TDST_SEQST) begin
+          ev_resp_q <= tbus[6];
+          ev_rsel_q <= tbus[5];
+        end
         ev_save_q <= ev_save & (f_biu != rd68884_ucode_pkg::BIU_SAVE_WR);
 
         t <= tbus;
@@ -1140,6 +1158,12 @@ module rd68884_seq (
           rd68884_ucode_pkg::TDST_XI2:   xi2  <= tbus;
           rd68884_ucode_pkg::TDST_CMD:   cmd  <= tbus[31:16];
           rd68884_ucode_pkg::TDST_FLAGS: exc_pend <= ~tbus[27];
+          rd68884_ucode_pkg::TDST_SEQST: begin
+            mask      <= tbus[19:12];
+            rn        <= tbus[11:9];
+            is_cond   <= tbus[8];
+            exc_pend  <= tbus[7];
+          end
           default: ;
         endcase
 
@@ -1240,7 +1264,16 @@ module rd68884_seq (
         endcase
 
         // ---- the return stack ------------------------------------------------
-        if (f_seq == rd68884_ucode_pkg::SEQ_CALL) begin
+        if (f_tdst == rd68884_ucode_pkg::TDST_SEQST) begin
+          // A busy frame's resume address (never with a CALL or RET).
+          case (sp)
+            2'd0:    stack0 <= tbus[31:20];
+            2'd1:    stack1 <= tbus[31:20];
+            2'd2:    stack2 <= tbus[31:20];
+            default: stack3 <= tbus[31:20];
+          endcase
+          sp <= sp + 2'd1;
+        end else if (f_seq == rd68884_ucode_pkg::SEQ_CALL) begin
           case (sp)
             2'd0:    stack0 <= upc_inc;
             2'd1:    stack1 <= upc_inc;

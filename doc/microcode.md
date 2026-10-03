@@ -19,7 +19,7 @@ The four parts and where each is defined:
 | `make iss-arith` | The same random arithmetic cases, `ARITH_N` of them (20,000 by default): operands drawn towards the specials, the ends of each precision's range and the rounding boundaries; every rounding mode, precision and trap enable |
 | `make iss-testfloat` | Berkeley TestFloat's vectors through the microcode, with every dialog, with the skips of `tools/model/check_testfloat.py` |
 | `tools/iss/tests/test_packed.py` (part of `iss-test`; `PACKED_N` cases) | The packed conversions against the exact value: FPU 4.3.3's bound, and INEX1/INEX2 exactly when inexact |
-| `make sys` | On RD68021 with RD68884 as its coprocessor, for 32-, 16- and 8-bit FPU ports: `sim/programs/fpu_m4.S` (the dialogs); `fpu_m5.S` and `fpu_m6.S` (150 and 120 vectors from the golden model, M5's and M6's operations); `fpu_m7.S` (100 transcendental vectors from the ISS); `fparith.c` (copied from RD68021) bit for bit against the host's x87 and SSE, and its transcendentals reported in ulps against the host's libm; RD68021's `fpu.S`, adapted (its header lists how) |
+| `make sys` | On RD68021 with RD68884 as its coprocessor, for 32-, 16- and 8-bit FPU ports: `sim/programs/fpu_m4.S` (the dialogs); `fpu_m5.S` and `fpu_m6.S` (150 and 120 vectors from the golden model, M5's and M6's operations); `fpu_m7.S` (100 transcendental vectors from the ISS); `fpu_m8.S` (FSAVE in mid-transfer, through injected bus errors and interrupts, and tracing); `fparith.c` (copied from RD68021) bit for bit against the host's x87 and SSE, and its transcendentals reported in ulps against the host's libm; RD68021's `fpu.S`, adapted (its header lists how) |
 | `tools/iss/lockstep.py` (part of `make sys`) | The RTL sequencer against the ISS, every clock of the 32-bit runs: the recorded BIU signals are replayed into the ISS, and the micro-address and every enabled output must be identical |
 
 ## Timing rules
@@ -58,6 +58,7 @@ Each of these was found by the differential tests. Each needs the BIU, because n
 | FSAVE/FRESTORE frames are not followed by a response read | The BIU counts the frame's long words (`XFER`) and expects a command after the last |
 | After FRESTORE of a frame with a pending instruction, the interrupted MPU re-reads the response before the microcode has rebuilt the first primitive | The restore CIR write itself sets the response to `$8900`. The restart path skips `CLEAR` |
 | On an 8-bit port the MPU reads the response in two byte cycles, and the microcode can write a new primitive between them, even in the clock of the first byte | The first byte snapshots the response, and a write after the snapshot marks it stale. The second byte then returns the snapshot and raises no read event, so a one-shot primitive the MPU has not seen is kept. A write in the clock of the first byte counts as after it (found by `fpu_m6` at M6) |
+| The same split read of the save CIR: begun while come-again, finished after the microcode posted the frame, it raises the save request again. The next read takes the frame, and the stale request then starts a second save nobody asked for | A save read that starts a frame also clears the request. Found by `fpu_m8` at M8, on the 8-bit port |
 
 ## The value format
 
@@ -207,6 +208,51 @@ The `LOG10` constant is accurate to about 2⁻³² relative. That is exact for e
 - **The multiplier** is a 72 × 16 product added to `C`/2¹⁶, in DSP48E1 slices. `LOG10`'s 18 × 32 product takes two more.
 - **Branch timing:** one microinstruction per clock, with no delay slot. The M5 checkpoint measures 56.8 MHz after place and route on the xc7a35t-1 (doc/size-and-speed.md), above the 50 MHz the core clock needs.
 
+## The busy frame (M8)
+
+The busy frame is `tools/ucode/busy.py`. FSAVE can come while an instruction is part-way through moving operands:
+- when a bus error stops an operand transfer, and the handler saves the FPU (UM 7.5.2.8);
+- when an interrupt is taken while the main processor polls a null primitive with CA and IA set (FPU 7.5.4.3, UM 7.4.1).
+
+Every wait for an operand (`OPW_VALID`, or `!OPR_VALID`) is therefore a loop that also looks for a save request:
+
+```
+w:    BR cond -> on;   BR !SAVE_REQ -> w
+      CALL busy_save            the return address is the resume token
+stub: <replay>                  writes back what the BIU held here
+      JUMP w
+on:
+```
+
+`busy_save` sends 45 long words (format word `$1FB4`). The layout is our own; FPU 6.4.2.3 makes it opaque. FRESTORE receives them in the reverse of FSAVE's order:
+
+| Received | Contents |
+|---|---|
+| 1 | `SEQST`: the resume address (from the return stack), `MASK`, `RN`, `IS_COND`, `EXC_PEND`, and the `RESP_READ` and `RSEL_READ` events |
+| 2 | The command word |
+| 3–5 | ETEMP, through `XI` |
+| 6–8 | `XI`: the operand being transferred |
+| 9 | The BIU flags |
+| 10–45 | Ones |
+
+`rest_busy` loads these, pushes the resume address and RETs into the stub. The stub writes the response back:
+- **Usually** `$8900`, with the expectation the transfer had: operand writes, or operand reads with the operand register written again.
+- **FMOVE out's first wait** may be interrupted before its primitive was read. Its stub then looks at the `RESP_READ` event and writes the primitive itself again.
+
+At any wait only `XI`, `MASK`, `RN`, the command word and the flags are live. Every computation has finished, or not yet started. FSAVE during a computation is answered come-again by the BIU until the microcode reaches a wait, or finishes and saves an idle frame.
+
+A protocol violation pending makes an idle frame, as the model has it.
+
+The checks:
+- `tools/iss/tests/test_busy.py`, part of `iss-test`, runs on the model and on the ISS:
+  - FSAVE part-way through FMOVEM in and out, FMOVE.X in and out, and a control-register FMOVEM;
+  - an interrupt while FMOVE out polls;
+  - in each case a kernel that saves the user's registers and runs other FPU work before FRESTORE. Everything but the frame bytes must agree.
+- `sim/programs/fpu_m8.S` runs on RD68021 with injected bus errors (`sys_tb`'s RES+$84) and interrupts (RES+$80):
+  - bus errors on FMOVEM in and out, FMOVE.X out, FMOVE.D in and a control-register FMOVEM;
+  - an interrupt while FMOVE.P out computes (a busy frame) and one while FMOD computes (an idle frame);
+  - tracing through polling instructions.
+
 ## The transcendentals (M7)
 
 Every function is computed in the 72-bit working format, truncating, and the result is then rounded by `post` like any other, with `STK` forced on. The internal error is a few units of 2⁻⁷¹. `make trans-accuracy` measures the result against mpmath: no worse than 0.54 ulp of extended at round-to-nearest, close to correctly rounded. FPU 4.3.2 allows 2048 ulp, one ulp of double.
@@ -253,4 +299,4 @@ Implemented:
 - since M6, FMOD, FREM (with the quotient byte), FSCALE, FMOVECR, and the packed decimal format in both directions, with static and dynamic k-factors;
 - since M7, every transcendental instruction (FPU table 4-13), with the alias opmodes $07, $0B, $13, $17 and $31–$37.
 
-Every general instruction of the MC68881 is implemented. A save request while operands are part-way through a transfer is not yet serviced: the busy frame is M8.
+Every general instruction of the MC68881 is implemented. Since M8, an FSAVE with operands part-way through a transfer takes a busy frame (below).

@@ -313,6 +313,7 @@ class Core:
                 'BSUN_EN': self.fpcr >> 15 & 1,
                 'REST_NULL': int(b['restore_word'] >> 8 == 0),
                 'REST_IDLE': int(b['restore_word'] == 0x1F18),
+                'REST_BUSY': int(b['restore_word'] == 0x1FB4),
                 'FLINE': int(opclass == 1 or ((opclass == 0 or (opclass == 2 and rx != 7))
                                               and cmd >> 6 & 1)),
                 'REPORTS': int(opclass in (0, 2, 3)), 'PCEN': pcen,
@@ -364,6 +365,9 @@ class Core:
                 | (1 << 26) | 0xFFFF
         elif ts == 'RESTW':
             tbus = b['restore_word']
+        elif ts == 'SEQST':
+            tbus = (self.stack[(self.sp - 1) & 3] << 20) | (self.mask << 12) | (self.rn << 9) \
+                | (self.is_cond << 8) | (self.exc_pend << 7) | (ev_resp << 6) | (ev_rsel << 5)
         else:
             tbus = 0xFFFFFFFF
 
@@ -378,6 +382,7 @@ class Core:
         n_exc, n_null, n_pcode = self.exc_pend, self.null_state, self.pcode
 
         td = F('TDST')
+        push_addr = None
         if td == 'FPCR':
             n_fpcr = tbus & 0xFFFF
         elif td == 'FPSR':
@@ -390,6 +395,10 @@ class Core:
             n_cmd = tbus >> 16
         elif td == 'FLAGS':
             n_exc = 1 - (tbus >> 27 & 1)
+        elif td == 'SEQST':
+            push_addr = (tbus >> 20) & 0xFFF
+            n_mask, n_rn = (tbus >> 12) & 0xFF, (tbus >> 9) & 7
+            n_is_cond, n_exc = (tbus >> 8) & 1, (tbus >> 7) & 1
 
         # The response and the BIU.
         rs = F('RESP')
@@ -760,6 +769,10 @@ class Core:
         seq = F('SEQ')
         tgt = F('TGT')
         nxt = self.upc + 1
+        if push_addr is not None:
+            # TDST SEQST: the busy frame's resume address onto the stack.
+            self.stack[self.sp] = push_addr
+            self.sp = (self.sp + 1) & 3
         if seq == 'JUMP':
             nxt = tgt
         elif seq == 'CALL':
@@ -789,6 +802,8 @@ class Core:
         self.mask, self.rn, self.ctr = n_mask, n_rn, n_ctr
         self.cmd, self.is_cond = n_cmd, n_is_cond
         self.exc_pend, self.null_state, self.pcode = n_exc, n_null, n_pcode
+        if td == 'SEQST':
+            ev_resp, ev_rsel = (tbus >> 6) & 1, (tbus >> 5) & 1
         self.ev_resp, self.ev_rsel, self.ev_save = ev_resp, ev_rsel, ev_save
         self.t = tbus
         self.upc = nxt & ((1 << fields.UADDR_BITS) - 1)

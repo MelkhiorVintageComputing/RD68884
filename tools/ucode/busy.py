@@ -1,0 +1,112 @@
+# SPDX-License-Identifier: CERN-OHL-S-2.0
+# Copyright 2026 Romain Dolbeau
+# Source location: https://github.com/MelkhiorVintageComputing/RD68884
+
+"""The busy frame: FSAVE in the middle of an operand transfer (FPU 6.4.2.3,
+7.5.4.3), and FRESTORE of one (doc/microcode.md).
+
+Every wait for the main processor to move an operand is a loop that also
+looks for a save request:
+
+    w:    BR cond -> on;  BR !SAVE_REQ -> w
+          CALL busy_save            the return address is the resume token
+    stub: <replay>                  after FRESTORE: what the BIU held here
+          JUMP w
+    on:
+
+busy_save sends the frame; FRESTORE pushes the token and RETs into the stub,
+which writes the response (and the operand register) back as they were and
+goes on waiting. The frame is our own layout -- the manual leaves it opaque
+-- and FRESTORE receives it in the reverse of FSAVE's order:
+
+    received first  SEQST (the token, MASK, RN, IS_COND, EXC_PEND, events)
+                    the command word
+                    ETEMP, three long words (through XI)
+                    XI0, XI1, XI2 (the operand being transferred)
+                    the BIU flags
+    received last   36 long words of ones (45 in all: format word $1FB4)
+"""
+
+BUSY_PAD = 36
+
+
+def bwait(p, cond, neg, replay):
+    """A busy-capable wait: until COND (or !COND with neg), replaying the
+    list of microword dicts `replay` after a restore."""
+    L, u = p.L, p.u
+    p.nbw = getattr(p, 'nbw', 0) + 1
+    w, on = f'bw{p.nbw}', f'bw{p.nbw}_on'
+    L(w)
+    u(SEQ='BR', NEG=int(neg), COND=cond, TGT=on)
+    u(SEQ='BR', NEG=1, COND='SAVE_REQ', TGT=w)
+    u(SEQ='CALL', TGT='busy_save')
+    if callable(replay):
+        replay(w)                      # emits its own way back to w
+    else:
+        for f in replay:
+            u(**f)
+        u(SEQ='JUMP', TGT=w)
+    L(on)
+
+
+def opw_replay():
+    """Waiting for an operand write: the primitive asking for it was read."""
+    return [dict(RESP='WR', IMM=0x8900, EXPECT='OPW')]
+
+
+def opr_replay(src):
+    """Waiting for the operand register, holding `src`, to be read."""
+    return [dict(RESP='WR', IMM=0x8900, EXPECT='OPR'), dict(TSRC=src, BIU='OPR_WR')]
+
+
+def emit(p):
+    L, u = p.L, p.u
+
+    # FSAVE with a transfer in progress. A protocol violation pending makes
+    # an idle frame instead, as the model has it (doc/model.md).
+    L('busy_save')
+    u(SEQ='BR', COND='PV', TGT='save_first')
+    u(CTR='LOAD', IMM=BUSY_PAD - 1)
+    u(TSRC='IMM', IMM=0x1FB4, BIU='SAVE_WR', XFER=45, comment='busy frame')
+    L('bs_pad')
+    u(TSRC='ONES', BIU='OPR_WR')
+    u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
+    u(SEQ='LOOP', TGT='bs_pad')
+    for src in ('FLAGS', 'XI2', 'XI1', 'XI0'):
+        u(TSRC=src, BIU='OPR_WR')
+        u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
+    u(RF='READ', RFA='ETEMP')
+    u(ASRC='RFQ')
+    u(XOP='PACKX')
+    for src in ('XI2', 'XI1', 'XI0'):
+        u(TSRC=src, BIU='OPR_WR')
+        u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
+    u(FLAG='PEND_CMD')
+    u(TSRC='CMDW', BIU='OPR_WR', comment='the command word')
+    u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
+    u(TSRC='SEQST', BIU='OPR_WR', comment='the resume address, on the stack since the CALL')
+    u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
+    u(FLAG='CLR_EXC', comment='FPU 6.4.3: idle, no pending exceptions')
+    u(BIU='CLEAR', SEQ='JUMP', TGT='idle')
+
+    # FRESTORE of a busy frame.
+    L('rest_busy')
+    u(TSRC='RESTW', BIU='RESTORE_WR', XFER=45)
+    u(SEQ='WAIT', COND='OPW_VALID')
+    u(BIU='OPW_ACK', TSRC='OPW', TDST='SEQST', comment='pushes the resume address')
+    u(SEQ='WAIT', COND='OPW_VALID')
+    u(BIU='OPW_ACK', TSRC='OPW', TDST='CMD')
+    for k in range(3):
+        u(SEQ='WAIT', COND='OPW_VALID')
+        u(BIU='OPW_ACK', TSRC='OPW', TDST=f'XI{k}')
+    u(ASRC='UNPACKX')
+    u(RF='WRITE', RFA='ETEMP')
+    for k in range(3):
+        u(SEQ='WAIT', COND='OPW_VALID')
+        u(BIU='OPW_ACK', TSRC='OPW', TDST=f'XI{k}')
+    u(SEQ='WAIT', COND='OPW_VALID')
+    u(BIU='OPW_ACK', TSRC='OPW', TDST='FLAGS', CTR='LOAD', IMM=BUSY_PAD - 1)
+    L('rb_pad')
+    u(SEQ='WAIT', COND='OPW_VALID')
+    u(BIU='OPW_ACK', SEQ='LOOP', TGT='rb_pad')
+    u(FLAG='CLR_NULL', SEQ='RET', comment='into the replay stub, then the wait')

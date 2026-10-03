@@ -95,6 +95,7 @@ package rd68884_ucode_pkg;
   localparam logic [6:0] COND_K_POS = 7'd62;
   localparam logic [6:0] COND_Q_ODD = 7'd63;
   localparam logic [6:0] COND_A_POW2 = 7'd64;
+  localparam logic [6:0] COND_REST_BUSY = 7'd65;
 
   localparam int F_IDX_LSB = 11;
   localparam int F_IDX_W   = 2;
@@ -164,6 +165,7 @@ package rd68884_ucode_pkg;
   localparam logic [3:0] TSRC_FLAGS = 4'd10;
   localparam logic [3:0] TSRC_RESTW = 4'd11;
   localparam logic [3:0] TSRC_ONES = 4'd12;
+  localparam logic [3:0] TSRC_SEQST = 4'd13;
 
   localparam int F_TDST_LSB = 64;
   localparam int F_TDST_W   = 4;
@@ -176,6 +178,7 @@ package rd68884_ucode_pkg;
   localparam logic [3:0] TDST_XI2 = 4'd6;
   localparam logic [3:0] TDST_CMD = 4'd7;
   localparam logic [3:0] TDST_FLAGS = 4'd8;
+  localparam logic [3:0] TDST_SEQST = 4'd9;
 
   localparam int F_RF_LSB = 68;
   localparam int F_RF_W   = 2;
@@ -357,7 +360,7 @@ package rd68884_ucode_pkg;
 
   localparam logic [11:0] ENTRY_RESET = 12'd0;
   localparam logic [11:0] ENTRY_ABORT = 12'd7;
-  localparam logic [11:0] ENTRY_RESTORE = 12'd2458;
+  localparam logic [11:0] ENTRY_RESTORE = 12'd2666;
   localparam logic [11:0] ENTRY_ILLEGAL = 12'd6;
 
 endpackage

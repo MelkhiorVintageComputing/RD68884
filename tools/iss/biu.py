@@ -139,6 +139,7 @@ class Biu:
                 if self.save_valid:
                     ev['save'] = 1
                     self.save_valid = 0
+                    self.save_req = 0
                     if self.save_xfer:
                         self.expect, self.xfer = EXP_OPR, self.save_xfer
                 else:

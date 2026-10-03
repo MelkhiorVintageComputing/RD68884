@@ -14,6 +14,8 @@ dialog is tools/model/cpif.py; the field semantics are tools/iss/core.py.
 
 from asm import Program
 import arith_ucode
+import busy
+from busy import bwait, opw_replay, opr_replay
 
 ETEMP = 8          # register file entry of the exceptional operand
 
@@ -89,6 +91,7 @@ def build():
     # Opclasses 000, 010 and 011: the arithmetic (tools/ucode/arith_ucode.py)
     # =========================================================================
     arith_ucode.emit(p)
+    busy.emit(p)
 
     # =========================================================================
     # Opclass 100/101, the control registers. FPU 7.5.1.4, figure 7-22; the
@@ -102,15 +105,15 @@ def build():
     L('ci_go')
     u(SEQ='CALL', TGT='wait_first')
     u(SEQ='BR', NEG=1, COND='LST_CR', TGT='ci_sr', comment='FPCR first, then FPSR, then FPIAR')
-    u(SEQ='WAIT', COND='OPW_VALID')
+    bwait(p, 'OPW_VALID', False, opw_replay())
     u(BIU='OPW_ACK', TSRC='OPW', TDST='FPCR')
     L('ci_sr')
     u(SEQ='BR', NEG=1, COND='LST_SR', TGT='ci_iar2')
-    u(SEQ='WAIT', COND='OPW_VALID')
+    bwait(p, 'OPW_VALID', False, opw_replay())
     u(BIU='OPW_ACK', TSRC='OPW', TDST='FPSR')
     L('ci_iar2')
     u(SEQ='BR', NEG=1, COND='LST_IAR', TGT='ci_end')
-    u(SEQ='WAIT', COND='OPW_VALID')
+    bwait(p, 'OPW_VALID', False, opw_replay())
     u(BIU='OPW_ACK', TSRC='OPW')
     u(TSRC='T', BIU='FPIAR_WR')
     L('ci_end')
@@ -125,15 +128,15 @@ def build():
     u(SEQ='CALL', TGT='wait_first')
     u(SEQ='BR', NEG=1, COND='LST_CR', TGT='co_sr')
     u(TSRC='FPCR', BIU='OPR_WR')
-    u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
+    bwait(p, 'OPR_VALID', True, opr_replay('FPCR'))
     L('co_sr')
     u(SEQ='BR', NEG=1, COND='LST_SR', TGT='co_iar2')
     u(TSRC='FPSR', BIU='OPR_WR')
-    u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
+    bwait(p, 'OPR_VALID', True, opr_replay('FPSR'))
     L('co_iar2')
     u(SEQ='BR', NEG=1, COND='LST_IAR', TGT='ci_end')
     u(TSRC='FPIAR', BIU='OPR_WR')
-    u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
+    bwait(p, 'OPR_VALID', True, opr_replay('FPIAR'))
     u(SEQ='JUMP', TGT='ci_end')
 
     # =========================================================================
@@ -147,7 +150,7 @@ def build():
         u(RESP='WR', IMM=0x8C00, ORS='DN', ONESHOT=1, EXPECT='OPW',
           comment='transfer single main processor register: the list')
         u(SEQ='CALL', TGT='wait_first')
-        u(SEQ='WAIT', COND='OPW_VALID')
+        bwait(p, 'OPW_VALID', False, opw_replay())
         u(BIU='OPW_ACK', TSRC='OPW', TDST='MASK')
         L(f'mm_{d}_go')
         u(BIU='RSEL_WR', RESP='WR', IMM=0x810C if d == 'in' else 0xA10C, ONESHOT=1,
@@ -158,7 +161,7 @@ def build():
     u(SEQ='BR', COND='MASK_ZERO', TGT='mm_end')
     u(MASK='NEXT')
     for k in range(3):
-        u(SEQ='WAIT', COND='OPW_VALID')
+        bwait(p, 'OPW_VALID', False, opw_replay())
         u(BIU='OPW_ACK', TSRC='OPW', TDST=f'XI{k}')
     u(ASRC='UNPACKX')
     u(RF='WRITE', RFA='RN', SEQ='JUMP', TGT='mm_in_loop', comment='bit for bit (FPU 4.6)')
@@ -170,7 +173,7 @@ def build():
     u(XOP='PACKX')
     for k in range(3):
         u(TSRC=f'XI{k}', BIU='OPR_WR')
-        u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
+        bwait(p, 'OPR_VALID', True, opr_replay(f'XI{k}'))
     u(SEQ='JUMP', TGT='mm_out_loop')
     L('mm_end')
     u(SEQ='WAIT', COND='RSEL_READ', comment='an empty list: the select read still comes')
@@ -219,6 +222,7 @@ def build():
     u(FLAG='CLR_EXC')
     u(SEQ='BR', COND='REST_NULL', TGT='rest_null')
     u(SEQ='BR', COND='REST_IDLE', TGT='rest_idle')
+    u(SEQ='BR', COND='REST_BUSY', TGT='rest_busy')
     u(TSRC='IMM', IMM=0x0218, BIU='RESTORE_WR', XFER=0, SEQ='JUMP', TGT='idle',
       comment='invalid: the main processor aborts (FPU 7.5.4.7)')
     L('rest_null')

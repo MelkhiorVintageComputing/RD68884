@@ -640,7 +640,11 @@ module rd68884_biu (
         end
       end
       if (ev_save) begin
+        // The frame the main processor asked for has started: no request is
+        // left. (A split read on an 8-bit port can have re-raised it, its
+        // first part come-again, after the sequencer posted the frame.)
         save_valid_q <= 1'b0;
+        save_req_q   <= 1'b0;
       end
       if (ev_save_again) begin
         save_req_q <= 1'b1;
