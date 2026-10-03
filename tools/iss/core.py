@@ -25,6 +25,8 @@ import fields  # noqa: E402
 
 M72 = (1 << 72) - 1
 M80 = (1 << 80) - 1
+M88 = (1 << 88) - 1
+M68 = (1 << 68) - 1
 EXP_SPECIAL = 0x7FFF - 16383          # 16384: infinity and NaN
 EXP_ZERO = -16383
 ETEMP = 8
@@ -44,6 +46,11 @@ def sext16(v):
 def wrap18(v):
     v &= (1 << 18) - 1
     return v - (1 << 18) if v & (1 << 17) else v
+
+
+def sext7(v):
+    v &= 0x7F
+    return v - 0x80 if v & 0x40 else v
 
 
 def clamp_sa(v):
@@ -217,8 +224,14 @@ FP_ZERO = FP(0, EXP_ZERO, 0)
 
 
 class Core:
-    def __init__(self, words):
+    def __init__(self, words, crom=None):
         self.words = words
+        if crom is None:
+            import json
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   '..', '..', 'build', 'ucode.json')) as fh:
+                crom = json.load(fh)['crom']
+        self.crom = crom
         self.lay = {n: (pos, w, vals) for n, pos, w, vals in fields.layout()[0]}
         self.reset_state()
 
@@ -248,6 +261,7 @@ class Core:
         self.psr = P_X
         self.rmr = RN
         self.rfq = FP()
+        self.qstk = 0
         self.rf = [FP() for _ in range(128)]
         self.exc_pend = 0
         self.null_state = 0
@@ -342,6 +356,9 @@ class Core:
                 'SUPPRESS': (exc & en & 0x64) != 0, 'PREC_X': self.psr == P_X,
                 'SIGN_XOR': a.sign != bb.sign, 'RM_MODE': self.rmr == RM,
                 'PREC_SGLX': self.psr == P_SGLX,
+                'P_SPECIAL': (self.xi[0] >> 28 & 7) == 7 and (self.xi[0] >> 16 & 0xFFF) == 0xFFF,
+                'P_SE': self.xi[0] >> 30 & 1, 'K_GT17': sext7(self.mask) > 17, 'K_POS': sext7(self.mask) > 0,
+                'Q_ODD': self.c & 1,
             }[cond_name]
         cond = int(bool(cond)) ^ F('NEG')
 
@@ -375,7 +392,7 @@ class Core:
         # ---- next state, from the start-of-clock values --------------------
         n_fpcr, n_fpsr = self.fpcr, self.fpsr
         n_xi = list(self.xi)
-        n_a, n_b, n_rfq = a.copy(), bb.copy(), self.rfq
+        n_a, n_b, n_rfq, n_qstk = a.copy(), bb.copy(), self.rfq, self.qstk
         n_c, n_rx, n_stk, n_stkb = self.c, self.rx, self.stk, self.stkb
         n_sa, n_rinex, n_psr, n_rmr = self.sa, self.rinex, self.psr, self.rmr
         n_mask, n_rn, n_ctr = self.mask, self.rn, self.ctr
@@ -436,19 +453,24 @@ class Core:
 
         # ---- the registers ------------------------------------------------
         rfop = F('RF')
-        if rfop != 'NONE':
+        if rfop == 'CROM':
+            off = {'IMM': 0, 'CMD': cmd & 0x7F, 'ELO': a.exp & 0x3F,
+                   'EHI': (a.exp >> 6) & 0x7F}[F('RFA')]
+            stk, sign, e, m = self.crom[(imm + off) & 0x1FF]
+            n_rfq, n_qstk = FP(sign, e, m), stk
+        elif rfop != 'NONE':
             ra = F('RFA')
             addr = {'IMM': imm & 0x7F, 'RX': rx, 'RY': cmd >> 7 & 7, 'RN': self.rn,
                     'ETEMP': ETEMP, 'CTR': self.ctr & 0x7F}[ra]
             if rfop == 'READ':
-                n_rfq = self.rf[addr].copy()
+                n_rfq, n_qstk = self.rf[addr].copy(), 0
             else:
                 self.rf[addr] = a.copy()
 
         asrc = F('ASRC')
         xi = self.xi
         if asrc == 'RFQ':
-            n_a = self.rfq.copy()
+            n_a, n_stk = self.rfq.copy(), self.stk | self.qstk
         elif asrc == 'UNPACKX':
             n_a = unpack_x(xi)
         elif asrc == 'NAN':
@@ -491,6 +513,26 @@ class Core:
                 n_xi[0] = ((a.mant >> (72 - nb)) & ((1 << nb) - 1)) << (32 - nb)
             else:
                 n_xi[0] = place_int(-(1 << (nb - 1)) if a.sign else (1 << (nb - 1)) - 1, nb)
+        elif xo in ('DIGL', 'DIGR', 'EDIGR', 'EDIG3'):
+            v = ((xi[0] & 0xF) << 64) | (xi[1] << 32) | xi[2]
+            dig = ((self.rx & 1) << 3) | (a.mant >> 69)
+            ex = (xi[0] >> 16) & 0xFFF
+            if xo == 'DIGL':
+                v = (v << 4) & M68
+            elif xo == 'DIGR':
+                v = (dig << 64) | (v >> 4)
+            elif xo == 'EDIGR':
+                ex = (dig << 8) | (ex >> 4)
+            if xo == 'EDIG3':
+                n_xi[0] = (xi[0] & ~0xF000) | (dig << 12)
+            else:
+                n_xi[0] = (xi[0] & ~0x0FFF000F) | (ex << 16) | (v >> 64)
+                n_xi[1], n_xi[2] = (v >> 32) & 0xFFFFFFFF, v & 0xFFFFFFFF
+        elif xo == 'EDIGL':
+            ex = (((xi[0] >> 16) & 0xFFF) << 4) & 0xFFF
+            n_xi[0] = (xi[0] & ~0x0FFF0000) | (ex << 16)
+        elif xo == 'PINIT':
+            n_xi = [(a.sign << 31) | (int(a.exp < 0) << 30), 0, 0]
 
         # ---- the mantissa operation ------------------------------------------
         mop = F('MOP')
@@ -553,8 +595,8 @@ class Core:
         elif mop == 'CLRAM':
             n_a.mant = 0
         elif mop == 'MULSTEP':
-            k = (bb.mant >> 8) & 0xFFFF
-            n_c = ((self.c >> 16) + (a.mant >> 8) * k) & M80
+            k = bb.mant & 0xFFFF
+            n_c = ((self.c >> 16) + a.mant * k) & M88
             n_stk = self.stk | int(self.c & 0xFFFF != 0)
             n_b.mant = bb.mant >> 16
         elif mop == 'MULFIN':
@@ -613,6 +655,12 @@ class Core:
             n_a.exp, n_a.mant = emax, M72 & ~((1 << lsb) - 1)
         elif mop == 'ZEROM':
             n_a.exp, n_a.mant = EXP_ZERO, 0
+        elif mop == 'MUL10':
+            n_a.mant = (a.mant * 10) & M72
+        elif mop == 'ADDDIG':
+            n_a.mant = (a.mant + (xi[0] & 0xF)) & M72
+        elif mop == 'QINC':
+            n_c = (self.c & ~0x7F) | ((self.c + 1) & 0x7F)
 
         # ---- the exponent operation --------------------------------------------
         eop = F('EOP')
@@ -636,6 +684,23 @@ class Core:
             n_a.exp = emin
         elif eop == 'HALF':
             n_a.exp = a.exp >> 1
+        elif eop == 'LDB':
+            n_a.exp = bb.exp
+        elif eop == 'ADDBI':
+            n = (bb.mant >> 8) & 0xFFFF
+            n_a.exp = wrap18(a.exp + (-n if bb.sign else n))
+        elif eop == 'NEGE':
+            n_a.exp = wrap18(-a.exp)
+        elif eop == 'EXP10':
+            n_a.exp = wrap18(a.exp * 10 + ((xi[0] >> 24) & 0xF))
+        elif eop == 'LOG10':
+            # floor(E log10 2), exact for every exponent of the range
+            # (doc/microcode.md): log10 2 * 2^32 = $4D104D42.07...
+            n_a.exp = (a.exp * 0x4D104D42) >> 32
+        elif eop == 'LDK':
+            n_a.exp = sext7(self.mask)
+        elif eop == 'SUBK':
+            n_a.exp = wrap18(a.exp - sext7(self.mask))
 
         sg = F('SGN')
         if sg == 'NEG':
@@ -646,6 +711,8 @@ class Core:
             n_a.sign = a.sign ^ bb.sign
         elif sg == 'RMZ':
             n_a.sign = int(self.rmr == RM)
+        elif sg == 'XI0':
+            n_a.sign = xi[0] >> 31
 
         ps = F('PSR')
         if ps == 'FPCR':
@@ -667,6 +734,10 @@ class Core:
             n_fpsr |= aexc_of(exc)
         if fo == 'CCIMM':
             n_fpsr = (n_fpsr & ~0x0F000000) | ((imm & 0xF) << 24)
+        if fo == 'QSIGN':
+            n_fpsr = (n_fpsr & ~0x00800000) | ((a.sign ^ bb.sign) << 23)
+        if fo == 'QBITS':
+            n_fpsr = (n_fpsr & ~0x007F0000) | ((self.c & 0x7F) << 16)
         n_fpsr |= F('EXCSET') << 8
 
         co = F('CTR')
@@ -674,6 +745,8 @@ class Core:
             n_ctr = imm
         elif co == 'DEC':
             n_ctr = (self.ctr - 1) & 0xFFFF
+        elif co == 'LOADE':
+            n_ctr = a.exp & 0xFFFF
         mo = F('MASK')
         if mo == 'LOAD':
             n_mask = cmd & 0xFF
@@ -703,6 +776,8 @@ class Core:
             n_is_cond = 1
         elif fl == 'CLR_COND':
             n_is_cond = 0
+        elif fl == 'SET_STK':
+            n_stk = 1
 
         # ---- the next micro-address ----------------------------------------
         seq = F('SEQ')
@@ -731,7 +806,7 @@ class Core:
 
         n_a.exp = wrap18(n_a.exp)
         self.fpcr, self.fpsr, self.xi = n_fpcr, n_fpsr, n_xi
-        self.a, self.b, self.rfq = n_a, n_b, n_rfq
+        self.a, self.b, self.rfq, self.qstk = n_a, n_b, n_rfq, n_qstk
         self.c, self.rx, self.stk, self.stkb = n_c, n_rx, n_stk, n_stkb
         self.sa, self.rinex, self.psr, self.rmr = n_sa, n_rinex, n_psr, n_rmr
         self.mask, self.rn, self.ctr = n_mask, n_rn, n_ctr

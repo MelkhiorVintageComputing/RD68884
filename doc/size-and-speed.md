@@ -14,6 +14,9 @@ Size is the project's first goal (CLAUDE.md), so every milestone records what it
 | M5 arithmetic | synth | 4331 | 898 | 4 | 5 | WNS +5.15 ns at 20 ns | one 79-bit adder for every mantissa sum; constant rounding masks |
 | M5 arithmetic | impl | 4386 | 898 | 4 | 5 | 56.8 MHz (17.60 ns) | `make impl`; limited by microword → rounding → `A`'s mantissa, 29 levels |
 
+| M6 FMOD/FREM, FSCALE, FMOVECR, packed decimal | synth | 4763 | 906 | 6 | 11 | WNS +4.53 ns at 20 ns | +432 LUTs: the constant ROM's address and RFQ multiplexer, the digit shifts, the exponent operations; `LOG10`'s product in 2 DSPs; the constant ROM and a microcode store past 1K words in block RAM |
+| M6 | impl | 4744 | 906 | 6 | 11 | 58.1 MHz (17.23 ns) | `make impl`; limited by microword → `A`'s exponent, 31 levels |
+
 M5 notes:
 - The utilisation-by-hierarchy report puts most of these LUTs in `u_rom`. Vivado has optimised across the ROM's boundary, so its outputs are decoded control rather than the 116 stored bits: the instance has 613 output pins and no flip-flops of its own besides the 3 RAMB36. Only the total is meaningful.
 - **About 3,400 LUTs are the M5 datapath**, about 16% of the 35T. That is over the budget's share for this point. The candidates for the next reduction are:

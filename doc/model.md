@@ -49,7 +49,7 @@ These are places where the manual is silent or contradicts itself. Each is marke
 | FMOD/FREM with an infinite source or zero FPn | Quotient byte = sign only, zero bits |
 | FMOVE to B/W/L out of range | OPERR alone, no INEX2; saturated result |
 | Packed output with k ≤ 0 | At least 1 and at most 17 significant digits |
-| Packed rounding | The current rounding mode, applied once to the exact value (correctly rounded; the manual allows 0.97/1.47 ulp) |
+| Packed rounding | The current rounding mode, applied once to the exact value (correctly rounded; the manual allows 0.97/1.47 ulp). The microcode meets the manual's bound and is correctly rounded wherever the result can be exact (doc/microcode.md); the tests compare the two to the bound |
 | FMOVECR at an undocumented offset | +0.0 |
 | FATANH(±1) | DZ and ±∞ with the sign of the source (the manual says the opposite sign; see contradictions) |
 | FLOGNP1(−1) | DZ and −∞ (FPU 6.1.6), not the NaN of the table's note |

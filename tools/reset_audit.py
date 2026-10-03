@@ -67,7 +67,7 @@ UNRESET_FF = {
 # also fails if a name here stops being needed -- an exemption that has quietly
 # become unnecessary is one nobody will re-examine.
 #
-# Two, both the read register of a block RAM, which keeps it inside the
+# Three, each the read register of a block RAM, which keeps it inside the
 # primitive and cannot give it a reset value on every part (Quartus, given one,
 # builds the memory from logic):
 #
@@ -79,12 +79,18 @@ UNRESET_FF = {
 #   the register file's read register (rd68884_regfile.q), 91 bits. Nothing
 #   reads it before the microcode has issued a read, and every entry the
 #   programmer can see is written by the reset microcode first.
+#
+#   the constant ROM's read register (rd68884_crom.rom_q), 92 bits. Nothing
+#   reads it before the microcode has issued a read: the flag that selects it
+#   onto RFQ (rd68884_seq.q_crom) is reset, and only a constant ROM read sets
+#   it.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 'ucode'))
 import fields  # noqa: E402
 
 EXEMPT = {'the microcode store read register, rd68884_ucode_rom.rom_q': fields.width(),
-          'the register file read register, rd68884_regfile.q': 91}
+          'the register file read register, rd68884_regfile.q': 91,
+          'the constant ROM read register, rd68884_crom.rom_q': 92}
 
 FORBIDDEN = [
     (re.compile(r'^\s*initial\b'),

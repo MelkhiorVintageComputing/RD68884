@@ -41,7 +41,10 @@ FIELDS = [
               'B_NAN', 'B_SNAN', 'B_SIGN', 'A_J', 'AE_LT_EMIN', 'AE_GT_EMAX',
               'AE_LT_XMIN', 'AE_LT_B', 'AE_GE_IMM', 'AE_ODD', 'RINEX', 'RX0',
               'OVF_INF', 'INT_OVF', 'B_LT_A', 'B_EQ_A', 'TRAP', 'SUPPRESS',
-              'PREC_X', 'SIGN_XOR', 'RM_MODE', 'PREC_SGLX']),
+              'PREC_X', 'SIGN_XOR', 'RM_MODE', 'PREC_SGLX',
+              # M6: packed decimal (XI holds the image), the k-factor in
+              # MASK[6:0], the quotient's parity in C[0]
+              'P_SPECIAL', 'P_SE', 'K_GT17', 'K_POS', 'Q_ODD']),
     ('IDX', ['OPCLASS', 'RX', 'OPMODE']),
     ('TGT', UADDR_BITS),
     ('IMM', 16),
@@ -72,8 +75,11 @@ FIELDS = [
     # ---- the floating-point registers -------------------------------------------
     # RF READ: RFQ <= RF[addr] (available to the next microinstruction).
     # RF WRITE: RF[addr] <= A (A as it was at the start of the clock).
-    ('RF', ['NONE', 'READ', 'WRITE']),
-    ('RFA', ['IMM', 'RX', 'RY', 'RN', 'ETEMP', 'CTR']),
+    # CROM: RFQ <= the constant ROM (tools/ucode/crom.py) at IMM + an offset:
+    # RFA IMM none, CMD the command word's bits 6-0, ELO A's exponent bits
+    # 5-0, EHI its bits 12-6; QSTK <= the entry's sticky bit (0 on a READ).
+    ('RF', ['NONE', 'READ', 'WRITE', 'CROM']),
+    ('RFA', ['IMM', 'RX', 'RY', 'RN', 'ETEMP', 'CTR', 'CMD', 'ELO', 'EHI']),
     # A <= RFQ, unpack(XI) in a format, the default NaN, zero, or B (with
     # the sticky bit from its saved copy: B's save and A's restore).
     ('ASRC', ['NONE', 'RFQ', 'UNPACKX', 'NAN', 'ZERO', 'B', 'UNPACKS',
@@ -83,10 +89,20 @@ FIELDS = [
     # XI <= A packed: extended, single, double; an integer (B/W/L from the
     # command word's format); a NaN's top bits as an integer; the saturated
     # integer of A's sign (FPU 6.1.3).
-    ('XOP', ['NONE', 'PACKX', 'PACKS', 'PACKD', 'PACKI', 'PACKNI', 'PACKSAT']),
+    # Packed decimal (FPU figure 3-11): DIGL shifts the mantissa digits
+    # {XI0[3:0], XI1, XI2} left a digit, EDIGL the exponent digits XI0[27:16];
+    # DIGR shifts the mantissa digits right a digit, the new one (the
+    # remainder of a division by ten, doc/microcode.md) entering at XI0[3:0];
+    # EDIGR the same for XI0[27:16]; EDIG3 puts it in XI0[15:12]; PINIT
+    # clears XI but for SM = A's sign and SE = A's exponent's sign.
+    ('XOP', ['NONE', 'PACKX', 'PACKS', 'PACKD', 'PACKI', 'PACKNI', 'PACKSAT',
+             'DIGL', 'EDIGL', 'DIGR', 'EDIGR', 'EDIG3', 'PINIT']),
     # FPSR: the condition codes from A, clear the exception byte, accrue it
     # (FPU 2.3.4), or set the condition codes to IMM[3:0].
-    ('FPSR', ['NONE', 'CC', 'CLREXC', 'CC_CLREXC', 'ACCRUE', 'CCIMM']),
+    # QSIGN: the quotient byte's sign <= A's sign xor B's; QBITS: its seven
+    # bits <= C[6:0] (FMOD, FREM).
+    ('FPSR', ['NONE', 'CC', 'CLREXC', 'CC_CLREXC', 'ACCRUE', 'CCIMM', 'QSIGN',
+              'QBITS']),
     ('EXCSET', 8),                    # OR into the FPSR exception byte
 
     # ---- the arithmetic ---------------------------------------------------------
@@ -94,23 +110,25 @@ FIELDS = [
     ('MOP', ['NONE', 'ADD', 'SUB', 'NEG', 'SHRA', 'SHRB', 'NORM', 'RSH1',
              'ROUND', 'ROUNDX', 'TRUNCA', 'TRUNCB', 'CLRQ', 'CLRAM',
              'MULSTEP', 'MULFIN', 'DIVSTEP', 'DIVFIN', 'SQSTEP', 'SQFIN',
-             'EXPF', 'QUIET', 'INFA', 'MAXA', 'ZEROM']),
+             'EXPF', 'QUIET', 'INFA', 'MAXA', 'ZEROM', 'MUL10', 'ADDDIG',
+             'QINC']),
     # Exponent and shift-amount operations.
     ('EOP', ['NONE', 'ADDB', 'SUBB', 'ADDI', 'LDI', 'SA_AB', 'SA_IA', 'SA_IMM',
-             'SA_EMIN', 'LDEMIN', 'HALF']),
-    ('SGN', ['NONE', 'NEG', 'ABS', 'XOR', 'RMZ']),
+             'SA_EMIN', 'LDEMIN', 'HALF', 'LDB', 'ADDBI', 'NEGE', 'EXP10', 'LOG10',
+             'LDK', 'SUBK']),
+    ('SGN', ['NONE', 'NEG', 'ABS', 'XOR', 'RMZ', 'XI0']),
     # The precision and rounding mode registers every precision-dependent
     # operation reads (PSR: X, S, D or SGLX; RMR: a rounding mode).
     ('PSR', ['NONE', 'FPCR', 'X', 'S', 'D', 'SGLX']),
     ('RMR', ['NONE', 'FPCR', 'RZ']),
 
     # ---- counters, the FMOVEM mask, flags ---------------------------------------
-    ('CTR', ['NONE', 'LOAD', 'DEC']),
+    ('CTR', ['NONE', 'LOAD', 'DEC', 'LOADE']),
     # LOAD: MASK <= the command word's static list. NEXT: RN <= the next
     # register of the list in transfer order (FPU 4.7.1.6), and clear it.
     ('MASK', ['NONE', 'LOAD', 'NEXT']),
     ('FLAG', ['NONE', 'SET_EXC', 'CLR_EXC', 'SET_NULL', 'CLR_NULL', 'BSUN',
-              'RESET', 'PEND_NONE', 'PEND_CMD', 'SET_COND', 'CLR_COND']),
+              'RESET', 'PEND_NONE', 'PEND_CMD', 'SET_COND', 'CLR_COND', 'SET_STK']),
 ]
 
 

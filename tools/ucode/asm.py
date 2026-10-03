@@ -19,7 +19,9 @@ Outputs:
                                  by the address bits in use (the RD68021
                                  technique: Quartus builds a sparse case from
                                  logic)
-  build/ucode.json               the words, labels and comments, for the ISS
+  rtl/gen/rd68884_crom.sv        the constant ROM (tools/ucode/crom.py)
+  build/ucode.json               the words, labels and comments, and the
+                                 constant ROM, for the ISS
 """
 
 import argparse
@@ -30,6 +32,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import fields  # noqa: E402
+import crom  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
 GEN = os.path.join(ROOT, 'rtl', 'gen')
@@ -191,6 +194,46 @@ endmodule
     return '\n'.join(o)
 
 
+def gen_crom(table):
+    aw = (crom.DEPTH - 1).bit_length()
+    hw = (crom.WIDTH + 3) // 4
+    o = [BANNER.replace('tools/ucode/program.py', 'tools/ucode/crom.py'), f"""// The constant ROM, {crom.DEPTH} entries of {{sticky, sign, exponent[17:0],
+// mantissa[71:0]}}: the FMOVECR constants and the powers of ten, each
+// truncated to 72 bits with a sticky bit for what was cut off
+// (tools/ucode/crom.py, doc/microcode.md).
+//
+// Read with `re` and registered, as the register file is: a block RAM on every
+// target. The read register has no reset, and nothing reads it before the
+// microcode has issued a read: the third exemption in tools/reset_audit.py.
+module rd68884_crom (
+    input  logic              clk,
+    input  logic              re,
+    input  logic [{aw - 1}:0]       addr,
+    output logic [{crom.WIDTH - 1}:0]      q
+);
+
+  (* rom_style = "block" *)
+  logic [{crom.WIDTH - 1}:0] rom_q;
+  assign q = rom_q;
+
+  always_ff @(posedge clk) begin
+    if (re) begin
+      case (addr)"""]
+    zero = crom.word(crom.ZERO)
+    for i, e in enumerate(table):
+        w = crom.word(e)
+        if w != zero:
+            o.append(f"        {aw}'d{i:<4}: rom_q <= {crom.WIDTH}'h{w:0{hw}X};")
+    o.append(f"""        default: rom_q <= {crom.WIDTH}'h{zero:0{hw}X};
+      endcase
+    end
+  end
+
+endmodule
+""")
+    return '\n'.join(o)
+
+
 def build():
     sys.path.insert(0, HERE)
     import program  # noqa: E402
@@ -208,10 +251,13 @@ def main():
     words, labels, width = build()
     files = {os.path.join(GEN, 'rd68884_ucode_pkg.sv'): gen_pkg(labels, width),
              os.path.join(GEN, 'rd68884_ucode_rom.sv'): gen_rom(words, labels, width)}
+    ctab = crom.entries()
+    files[os.path.join(GEN, 'rd68884_crom.sv')] = gen_crom(ctab)
     os.makedirs(os.path.join(ROOT, 'build'), exist_ok=True)
     with open(os.path.join(ROOT, 'build', 'ucode.json'), 'w') as fh:
         json.dump({'width': width, 'words': [w for w, _ in words],
-                   'comments': [c for _, c in words], 'labels': labels}, fh)
+                   'comments': [c for _, c in words], 'labels': labels,
+                   'crom': [list(e) for e in ctab]}, fh)
     if a.check:
         stale = [f for f, t in files.items()
                  if not os.path.exists(f) or open(f).read() != t]

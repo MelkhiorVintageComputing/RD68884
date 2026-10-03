@@ -24,7 +24,9 @@ import os
 import random
 import unittest
 
-from model import cpif as C, formats as F
+from fractions import Fraction
+
+from model import cpif as C, formats as F, packed as P
 from model.cpif import FPU881
 from model.mpu import MPU, CPException
 from iss.machine import Machine
@@ -33,7 +35,7 @@ N = int(os.environ.get('ARITH_N', '300'))
 SEED = int(os.environ.get('ARITH_SEED', '1'))
 
 OPS_RR = [0x00, 0x01, 0x03, 0x04, 0x18, 0x1A, 0x1E, 0x1F, 0x20, 0x22, 0x23, 0x24,
-          0x27, 0x28, 0x38, 0x3A, 0x05, 0x1B, 0x2B, 0x39, 0x3D]
+          0x27, 0x28, 0x38, 0x3A, 0x05, 0x1B, 0x2B, 0x39, 0x3D, 0x21, 0x25, 0x26]
 OUT_FMTS = [F.FMT_L, F.FMT_S, F.FMT_X, F.FMT_W, F.FMT_D, F.FMT_B]
 IN_FMTS = OUT_FMTS
 
@@ -105,6 +107,32 @@ def near(rng, x):
     return (((s << 15) | e) << 80) | m
 
 
+def packed_operand(rng):
+    """A 96-bit packed image (FPU figure 3-11), towards what matters: the
+    exact scales (|exponent - 16| <= 27), the whole range, the specials."""
+    sm, se = rng.getrandbits(1), rng.getrandbits(1)
+    k = rng.randrange(12)
+    if k == 0:                                           # infinity or NaN
+        frac = 0 if rng.getrandbits(1) else rng.getrandbits(64)
+        return (sm << 95) | (1 << 94) | (3 << 92) | (0xFFF << 80) | frac
+    if k == 1:
+        e = rng.randrange(1000)
+        digits = [0] * 17                                # a zero
+    else:
+        e = rng.choice([rng.randrange(1000), rng.randrange(40), rng.randrange(16)])
+        n = rng.choice([17, 17, rng.randrange(1, 18)])
+        digits = [rng.randrange(10) for _ in range(n)] + [0] * (17 - n)
+        if rng.randrange(20) == 0:
+            digits[rng.randrange(17)] = rng.randrange(10, 16)   # note 2
+    ed = [(e // 100) % 10, (e // 10) % 10, e % 10]
+    v = (sm << 95) | (se << 94) | (rng.getrandbits(2) << 92 if rng.randrange(8) == 0 else 0)
+    v |= (ed[0] << 88) | (ed[1] << 84) | (ed[2] << 80)
+    v |= digits[0] << 64
+    for i, d in enumerate(digits[1:]):
+        v |= d << (4 * (15 - i))
+    return v
+
+
 def ieee_operand(rng, ebits, fbits):
     s = rng.getrandbits(1)
     emax = (1 << ebits) - 1
@@ -139,6 +167,8 @@ def source(rng, fmt):
         return ieee_operand(rng, 8, 23), 4
     if fmt == F.FMT_D:
         return ieee_operand(rng, 11, 52), 8
+    if fmt == F.FMT_P:
+        return packed_operand(rng), 12
     bits = F.INT_BITS[fmt]
     return int_operand(rng, bits), bits // 8
 
@@ -172,6 +202,8 @@ class Run:
         self.gen(cmd(2, F.FMT_X, c['ry'], 0), ('imm', c['dst'], 12))
         self.gen(cmd(4, 4, 0, 0), ('imm', c['fpcr'], 4))
         self.gen(cmd(4, 2, 0, 0), ('imm', 0, 4))
+        if 'kreg' in c:
+            self.m.d[(c['cmd'] >> 4) & 7] = c['kreg']
         self.gen(c['cmd'], c['ea'])
         try:
             self.events.append(('save', self.m.fsave(('predec', 7))))
@@ -203,17 +235,102 @@ def cases(rng, n):
             pre = near(rng, c['dst']) if rng.randrange(3) == 0 else x_operand(rng)
             c['pre'] = (rx, pre) if rx != ry else None
         elif k < 8:                                # <ea> to FPn
-            fmt = rng.choice(IN_FMTS)
-            img, nb = source(rng, fmt)
-            c['cmd'] = cmd(2, fmt, ry, rng.choice(OPS_RR))
-            c['ea'] = ('imm', img, nb)
+            fmt = rng.choice(IN_FMTS + [F.FMT_P, 7])
             c['pre'] = None
+            if fmt == 7:                           # FMOVECR
+                c['cmd'] = cmd(2, 7, ry, rng.choice([rng.randrange(128), 0, 0x0B, 0x0C,
+                                                     0x0D, 0x0E, 0x0F, 0x30, 0x31]
+                                                    + list(range(0x32, 0x40))))
+                c['ea'] = None
+                yield i, c
+                continue
+            img, nb = source(rng, fmt)
+            # Packed sources only through FMOVE: the conversion is held to
+            # FPU 4.3.3's bound, not to the bit, and an operation after it
+            # would carry a last-place difference anywhere.
+            op = 0 if fmt == F.FMT_P else rng.choice(OPS_RR)
+            c['cmd'] = cmd(2, fmt, ry, op)
+            c['ea'] = ('imm', img, nb)
         else:                                      # FPn to <ea>
-            fmt = rng.choice(OUT_FMTS)
-            c['cmd'] = cmd(3, fmt, ry, 0)
+            fmt = rng.choice(OUT_FMTS + [F.FMT_P, F.FMT_PDYN])
+            kf = rng.choice([rng.randrange(-20, 21), rng.randrange(-64, 64), 17, 0, 1])
+            c['cmd'] = cmd(3, fmt, ry, (kf & 0x7F) if fmt == F.FMT_P else
+                           (rng.randrange(8) << 4) if fmt == F.FMT_PDYN else 0)
+            c['kreg'] = kf & 0xFFFFFFFF
             c['ea'] = ('ind', 0)
             c['pre'] = None
         yield i, c
+
+
+# ----------------------------------------------------- packed tolerance
+def _x_frac(bits80):
+    r = F.reg_from_bits96(((bits80 >> 64) << 80) | (bits80 & ((1 << 64) - 1)))
+    x = F.decode_x(r)
+    return x.frac() if x.kind in ('fin', 'zero') else None
+
+
+def _adjacent(a80, b80, fpcr_v):
+    """Two register images one unit apart in the last place of the
+    precision (FPCR bits 7-6): the most two correct conversions can differ."""
+    fa, fb = _x_frac(a80), _x_frac(b80)
+    if fa is None or fb is None:
+        return False
+    va, vb = Fraction(*fa), Fraction(*fb)
+    if va == 0 or vb == 0 or (va < 0) != (vb < 0):
+        return False
+    bits = {1: 24, 2: 53}.get((fpcr_v >> 6) & 3, 64)
+    m = max(abs(va), abs(vb))
+    e = m.numerator.bit_length() - m.denominator.bit_length()
+    if Fraction(2) ** e > m:
+        e -= 1
+    return abs(va - vb) <= Fraction(2) ** (e - bits + 1)
+
+
+def _packed_value(img):
+    v = P.decode_p(img)
+    if v.kind == 'zero':
+        return Fraction(0)
+    if v.kind != 'fin':
+        return None
+    return Fraction(*v.frac())
+
+
+def _last_digit(img):
+    """The unit of the last of the seventeen digits of a packed image."""
+    e = ((img >> 88) & 0xF) * 100 + ((img >> 84) & 0xF) * 10 + ((img >> 80) & 0xF)
+    if (img >> 94) & 1:
+        e = -e
+    return Fraction(10) ** (e - 16)
+
+
+def packed_close(c, sm, si):
+    """A packed conversion where the ISS and the model differ only in the
+    last place, as FPU 4.3.3 allows: every other part of the state equal."""
+    opclass, fmt = (c['cmd'] >> 13) & 7, (c['cmd'] >> 10) & 7
+    if fmt not in (F.FMT_P, F.FMT_PDYN) or opclass not in (2, 3):
+        return False
+    diff = [k for k in sm if sm[k] != si[k]]
+    if opclass == 2:
+        if diff != ['regs']:
+            return False
+        ry = (c['cmd'] >> 7) & 7
+        if any(a != b for j, (a, b) in enumerate(zip(sm['regs'], si['regs'])) if j != ry):
+            return False
+        return _adjacent(sm['regs'][ry], si['regs'][ry], c['fpcr'])
+    if diff != ['mem']:
+        return False
+    a, b = sm['mem'], si['mem']
+    if set(a) != set(b):
+        return False
+    base = 0x4000
+    if any(a[q] != b[q] for q in a if not base <= q < base + 12):
+        return False
+    ia = int.from_bytes(bytes(a[base + i] for i in range(12)), 'big')
+    ib = int.from_bytes(bytes(b[base + i] for i in range(12)), 'big')
+    va, vb = _packed_value(ia), _packed_value(ib)
+    if va is None or vb is None:
+        return False
+    return abs(va - vb) <= max(_last_digit(ia), _last_digit(ib))
 
 
 class Arith(unittest.TestCase):
@@ -227,6 +344,10 @@ class Arith(unittest.TestCase):
                 for r in (model, iss):
                     r.gen(cmd(2, F.FMT_X, c['pre'][0], 0), ('imm', c['pre'][1], 12))
             sm, si = model.case(c), iss.case(c)
+            if sm != si and packed_close(c, sm, si):
+                # within the bound; start both again so it does not linger
+                model, iss = Run(FPU881(latency=lambda c: 3)), Run(Machine())
+                continue
             if sm != si:
                 diff = {k: (sm[k], si[k]) for k in sm if sm[k] != si[k]}
                 bad.append((i, c, diff))

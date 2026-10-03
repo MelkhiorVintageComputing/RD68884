@@ -11,7 +11,7 @@
 
 package rd68884_ucode_pkg;
 
-  localparam int UW = 116;
+  localparam int UW = 119;
   localparam int UA = 11;
 
   localparam int F_SEQ_LSB = 0;
@@ -89,6 +89,11 @@ package rd68884_ucode_pkg;
   localparam logic [5:0] COND_SIGN_XOR = 6'd56;
   localparam logic [5:0] COND_RM_MODE = 6'd57;
   localparam logic [5:0] COND_PREC_SGLX = 6'd58;
+  localparam logic [5:0] COND_P_SPECIAL = 6'd59;
+  localparam logic [5:0] COND_P_SE = 6'd60;
+  localparam logic [5:0] COND_K_GT17 = 6'd61;
+  localparam logic [5:0] COND_K_POS = 6'd62;
+  localparam logic [5:0] COND_Q_ODD = 6'd63;
 
   localparam int F_IDX_LSB = 10;
   localparam int F_IDX_W   = 2;
@@ -176,17 +181,21 @@ package rd68884_ucode_pkg;
   localparam logic [1:0] RF_NONE = 2'd0;
   localparam logic [1:0] RF_READ = 2'd1;
   localparam logic [1:0] RF_WRITE = 2'd2;
+  localparam logic [1:0] RF_CROM = 2'd3;
 
   localparam int F_RFA_LSB = 68;
-  localparam int F_RFA_W   = 3;
-  localparam logic [2:0] RFA_IMM = 3'd0;
-  localparam logic [2:0] RFA_RX = 3'd1;
-  localparam logic [2:0] RFA_RY = 3'd2;
-  localparam logic [2:0] RFA_RN = 3'd3;
-  localparam logic [2:0] RFA_ETEMP = 3'd4;
-  localparam logic [2:0] RFA_CTR = 3'd5;
+  localparam int F_RFA_W   = 4;
+  localparam logic [3:0] RFA_IMM = 4'd0;
+  localparam logic [3:0] RFA_RX = 4'd1;
+  localparam logic [3:0] RFA_RY = 4'd2;
+  localparam logic [3:0] RFA_RN = 4'd3;
+  localparam logic [3:0] RFA_ETEMP = 4'd4;
+  localparam logic [3:0] RFA_CTR = 4'd5;
+  localparam logic [3:0] RFA_CMD = 4'd6;
+  localparam logic [3:0] RFA_ELO = 4'd7;
+  localparam logic [3:0] RFA_EHI = 4'd8;
 
-  localparam int F_ASRC_LSB = 71;
+  localparam int F_ASRC_LSB = 72;
   localparam int F_ASRC_W   = 4;
   localparam logic [3:0] ASRC_NONE = 4'd0;
   localparam logic [3:0] ASRC_RFQ = 4'd1;
@@ -200,23 +209,29 @@ package rd68884_ucode_pkg;
   localparam logic [3:0] ASRC_UNPACKW = 4'd9;
   localparam logic [3:0] ASRC_UNPACKB = 4'd10;
 
-  localparam int F_BSRC_LSB = 75;
+  localparam int F_BSRC_LSB = 76;
   localparam int F_BSRC_W   = 2;
   localparam logic [1:0] BSRC_NONE = 2'd0;
   localparam logic [1:0] BSRC_RFQ = 2'd1;
   localparam logic [1:0] BSRC_A = 2'd2;
 
-  localparam int F_XOP_LSB = 77;
-  localparam int F_XOP_W   = 3;
-  localparam logic [2:0] XOP_NONE = 3'd0;
-  localparam logic [2:0] XOP_PACKX = 3'd1;
-  localparam logic [2:0] XOP_PACKS = 3'd2;
-  localparam logic [2:0] XOP_PACKD = 3'd3;
-  localparam logic [2:0] XOP_PACKI = 3'd4;
-  localparam logic [2:0] XOP_PACKNI = 3'd5;
-  localparam logic [2:0] XOP_PACKSAT = 3'd6;
+  localparam int F_XOP_LSB = 78;
+  localparam int F_XOP_W   = 4;
+  localparam logic [3:0] XOP_NONE = 4'd0;
+  localparam logic [3:0] XOP_PACKX = 4'd1;
+  localparam logic [3:0] XOP_PACKS = 4'd2;
+  localparam logic [3:0] XOP_PACKD = 4'd3;
+  localparam logic [3:0] XOP_PACKI = 4'd4;
+  localparam logic [3:0] XOP_PACKNI = 4'd5;
+  localparam logic [3:0] XOP_PACKSAT = 4'd6;
+  localparam logic [3:0] XOP_DIGL = 4'd7;
+  localparam logic [3:0] XOP_EDIGL = 4'd8;
+  localparam logic [3:0] XOP_DIGR = 4'd9;
+  localparam logic [3:0] XOP_EDIGR = 4'd10;
+  localparam logic [3:0] XOP_EDIG3 = 4'd11;
+  localparam logic [3:0] XOP_PINIT = 4'd12;
 
-  localparam int F_FPSR_LSB = 80;
+  localparam int F_FPSR_LSB = 82;
   localparam int F_FPSR_W   = 3;
   localparam logic [2:0] FPSR_NONE = 3'd0;
   localparam logic [2:0] FPSR_CC = 3'd1;
@@ -224,11 +239,13 @@ package rd68884_ucode_pkg;
   localparam logic [2:0] FPSR_CC_CLREXC = 3'd3;
   localparam logic [2:0] FPSR_ACCRUE = 3'd4;
   localparam logic [2:0] FPSR_CCIMM = 3'd5;
+  localparam logic [2:0] FPSR_QSIGN = 3'd6;
+  localparam logic [2:0] FPSR_QBITS = 3'd7;
 
-  localparam int F_EXCSET_LSB = 83;
+  localparam int F_EXCSET_LSB = 85;
   localparam int F_EXCSET_W   = 8;
 
-  localparam int F_MOP_LSB = 91;
+  localparam int F_MOP_LSB = 93;
   localparam int F_MOP_W   = 5;
   localparam logic [4:0] MOP_NONE = 5'd0;
   localparam logic [4:0] MOP_ADD = 5'd1;
@@ -255,30 +272,41 @@ package rd68884_ucode_pkg;
   localparam logic [4:0] MOP_INFA = 5'd22;
   localparam logic [4:0] MOP_MAXA = 5'd23;
   localparam logic [4:0] MOP_ZEROM = 5'd24;
+  localparam logic [4:0] MOP_MUL10 = 5'd25;
+  localparam logic [4:0] MOP_ADDDIG = 5'd26;
+  localparam logic [4:0] MOP_QINC = 5'd27;
 
-  localparam int F_EOP_LSB = 96;
-  localparam int F_EOP_W   = 4;
-  localparam logic [3:0] EOP_NONE = 4'd0;
-  localparam logic [3:0] EOP_ADDB = 4'd1;
-  localparam logic [3:0] EOP_SUBB = 4'd2;
-  localparam logic [3:0] EOP_ADDI = 4'd3;
-  localparam logic [3:0] EOP_LDI = 4'd4;
-  localparam logic [3:0] EOP_SA_AB = 4'd5;
-  localparam logic [3:0] EOP_SA_IA = 4'd6;
-  localparam logic [3:0] EOP_SA_IMM = 4'd7;
-  localparam logic [3:0] EOP_SA_EMIN = 4'd8;
-  localparam logic [3:0] EOP_LDEMIN = 4'd9;
-  localparam logic [3:0] EOP_HALF = 4'd10;
+  localparam int F_EOP_LSB = 98;
+  localparam int F_EOP_W   = 5;
+  localparam logic [4:0] EOP_NONE = 5'd0;
+  localparam logic [4:0] EOP_ADDB = 5'd1;
+  localparam logic [4:0] EOP_SUBB = 5'd2;
+  localparam logic [4:0] EOP_ADDI = 5'd3;
+  localparam logic [4:0] EOP_LDI = 5'd4;
+  localparam logic [4:0] EOP_SA_AB = 5'd5;
+  localparam logic [4:0] EOP_SA_IA = 5'd6;
+  localparam logic [4:0] EOP_SA_IMM = 5'd7;
+  localparam logic [4:0] EOP_SA_EMIN = 5'd8;
+  localparam logic [4:0] EOP_LDEMIN = 5'd9;
+  localparam logic [4:0] EOP_HALF = 5'd10;
+  localparam logic [4:0] EOP_LDB = 5'd11;
+  localparam logic [4:0] EOP_ADDBI = 5'd12;
+  localparam logic [4:0] EOP_NEGE = 5'd13;
+  localparam logic [4:0] EOP_EXP10 = 5'd14;
+  localparam logic [4:0] EOP_LOG10 = 5'd15;
+  localparam logic [4:0] EOP_LDK = 5'd16;
+  localparam logic [4:0] EOP_SUBK = 5'd17;
 
-  localparam int F_SGN_LSB = 100;
+  localparam int F_SGN_LSB = 103;
   localparam int F_SGN_W   = 3;
   localparam logic [2:0] SGN_NONE = 3'd0;
   localparam logic [2:0] SGN_NEG = 3'd1;
   localparam logic [2:0] SGN_ABS = 3'd2;
   localparam logic [2:0] SGN_XOR = 3'd3;
   localparam logic [2:0] SGN_RMZ = 3'd4;
+  localparam logic [2:0] SGN_XI0 = 3'd5;
 
-  localparam int F_PSR_LSB = 103;
+  localparam int F_PSR_LSB = 106;
   localparam int F_PSR_W   = 3;
   localparam logic [2:0] PSR_NONE = 3'd0;
   localparam logic [2:0] PSR_FPCR = 3'd1;
@@ -287,25 +315,26 @@ package rd68884_ucode_pkg;
   localparam logic [2:0] PSR_D = 3'd4;
   localparam logic [2:0] PSR_SGLX = 3'd5;
 
-  localparam int F_RMR_LSB = 106;
+  localparam int F_RMR_LSB = 109;
   localparam int F_RMR_W   = 2;
   localparam logic [1:0] RMR_NONE = 2'd0;
   localparam logic [1:0] RMR_FPCR = 2'd1;
   localparam logic [1:0] RMR_RZ = 2'd2;
 
-  localparam int F_CTR_LSB = 108;
+  localparam int F_CTR_LSB = 111;
   localparam int F_CTR_W   = 2;
   localparam logic [1:0] CTR_NONE = 2'd0;
   localparam logic [1:0] CTR_LOAD = 2'd1;
   localparam logic [1:0] CTR_DEC = 2'd2;
+  localparam logic [1:0] CTR_LOADE = 2'd3;
 
-  localparam int F_MASK_LSB = 110;
+  localparam int F_MASK_LSB = 113;
   localparam int F_MASK_W   = 2;
   localparam logic [1:0] MASK_NONE = 2'd0;
   localparam logic [1:0] MASK_LOAD = 2'd1;
   localparam logic [1:0] MASK_NEXT = 2'd2;
 
-  localparam int F_FLAG_LSB = 112;
+  localparam int F_FLAG_LSB = 115;
   localparam int F_FLAG_W   = 4;
   localparam logic [3:0] FLAG_NONE = 4'd0;
   localparam logic [3:0] FLAG_SET_EXC = 4'd1;
@@ -318,10 +347,11 @@ package rd68884_ucode_pkg;
   localparam logic [3:0] FLAG_PEND_CMD = 4'd8;
   localparam logic [3:0] FLAG_SET_COND = 4'd9;
   localparam logic [3:0] FLAG_CLR_COND = 4'd10;
+  localparam logic [3:0] FLAG_SET_STK = 4'd11;
 
   localparam logic [10:0] ENTRY_RESET = 11'd0;
   localparam logic [10:0] ENTRY_ABORT = 11'd7;
-  localparam logic [10:0] ENTRY_RESTORE = 11'd556;
+  localparam logic [10:0] ENTRY_RESTORE = 11'd866;
   localparam logic [10:0] ENTRY_ILLEGAL = 11'd6;
 
 endpackage

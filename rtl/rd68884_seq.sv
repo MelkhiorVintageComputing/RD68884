@@ -161,7 +161,7 @@ module rd68884_seq (
   logic        b_sign;
   logic [17:0] b_exp;
   logic [71:0] b_mant;
-  logic [79:0] c;                // the multiplier's accumulator, the quotient, the root
+  logic [87:0] c;                // the multiplier's accumulator, the quotient, the root
   logic [3:0]  rxq;              // the mantissa's carry, borrow, or remainder bits above A
   logic        stk;              // the sticky bit below A
   logic        stkb;             // B's copy of it
@@ -175,7 +175,9 @@ module rd68884_seq (
   logic        ev_resp_q, ev_rsel_q, ev_save_q;
   logic        restore_req_q;
 
-  logic [90:0] rfq;              // the register file's read register
+  logic [90:0] rfq;              // the register file's or the constant ROM's read register
+  logic        q_crom;           // RFQ holds a constant
+  logic        qstk;             // that constant's sticky bit
 
   // ==========================================================================
   // Traps and conditions
@@ -553,6 +555,7 @@ module rd68884_seq (
   //   NEG      0 - A                    ROUND    (A without its low bits) + LSB
   //   DIVSTEP  {RX, A} - B              SQSTEP   (4R + the radicand's next two
   //                                              bits) - (4 root + 1)
+  //   MUL10    8A + 2A                  ADDDIG   A + the digit at XI0[3:0]
   // A subtraction's sign is bit 78; ADD's and ROUND's carry, SUB's borrow,
   // bit 72.
   logic [78:0] add_x, add_y, add_s;
@@ -581,6 +584,10 @@ module rd68884_seq (
       rd68884_ucode_pkg::MOP_SQSTEP: begin
         add_x = {1'b0, sq_r2};  add_y = ~{1'b0, c[75:0], 2'b01};  add_cin = 1'b1;
       end
+      rd68884_ucode_pkg::MOP_MUL10: begin
+        add_x = {7'd0, a_mant[68:0], 3'd0};  add_y = {7'd0, a_mant[70:0], 1'b0};
+      end
+      rd68884_ucode_pkg::MOP_ADDDIG: add_y = {75'd0, xi0[3:0]};
       default: ;
     endcase
     add_s = add_x + add_y + {78'd0, add_cin};
@@ -596,16 +603,16 @@ module rd68884_seq (
   always_comb begin
     div_q  = ~add_s[78];
     div_rr = div_q ? add_s[75:0] : {rxq, a_mant};
-    sq_q   = (c[79:76] == 4'd0) & ~add_s[78];
+    sq_q   = (c[87:76] == 12'd0) & ~add_s[78];
     sq_rr  = sq_q ? add_s[77:0] : sq_r2;
     r_nz   = (rxq != 4'd0) | (a_mant != 72'd0);
   end
 
-  // ---- the multiplier: 64 x 16 a clock, accumulated in C ---------------------------
-  logic [79:0] mul_prod, mul_acc;
+  // ---- the multiplier: 72 x 16 a clock, accumulated in C ---------------------------
+  logic [87:0] mul_prod, mul_acc;
   always_comb begin
-    mul_prod = a_mant[71:8] * b_mant[23:8];
-    mul_acc  = {16'd0, c[79:16]} + mul_prod;
+    mul_prod = a_mant * b_mant[15:0];
+    mul_acc  = {16'd0, c[87:16]} + mul_prod;
   end
 
   // The bits the arithmetic computes and never reads: the loop counter's
@@ -613,6 +620,24 @@ module rd68884_seq (
   // is below twice the divisor), SQSTEP's two (zero likewise).
   logic unused_x;
   assign unused_x = &{1'b1, lz_i[31:7], div_rr[75], sq_rr[77:76]};
+
+  // ---- packed decimal ----------------------------------------------------------
+  // LOG10: floor(E log10 2) = (E x $4D104D42) >> 32, exact over the range
+  // (doc/microcode.md). The digit a division by ten leaves: {RX[0], A[71:69]}.
+  logic signed [49:0] log10_p;
+  logic [17:0] log10_e;
+  logic [3:0]  dig;
+  logic [67:0] mdig;            // the mantissa digits {XI0[3:0], XI1, XI2}
+  always_comb begin
+    log10_p = $signed(a_exp) * $signed(32'h4D104D42);
+    log10_e = log10_p[49:32];
+    dig     = {rxq[0], a_mant[71:69]};
+    mdig    = {xi0[3:0], xi1, xi2};
+  end
+
+  // The product's fraction, and the digit DIGR shifts out.
+  logic unused_p;
+  assign unused_p = &{1'b1, log10_p[31:0], mdig[3:0]};
 
   // ---- FGETEXP: the exponent as a value ------------------------------------------
   logic [17:0] expf_abs;
@@ -686,6 +711,11 @@ module rd68884_seq (
       rd68884_ucode_pkg::COND_SIGN_XOR:   cond_raw = a_sign ^ b_sign;
       rd68884_ucode_pkg::COND_RM_MODE:    cond_raw = (rmr == RM);
       rd68884_ucode_pkg::COND_PREC_SGLX:  cond_raw = (psr == P_SGLX);
+      rd68884_ucode_pkg::COND_P_SPECIAL:  cond_raw = (xi0[30:28] == 3'b111) & (xi0[27:16] == 12'hFFF);
+      rd68884_ucode_pkg::COND_P_SE:       cond_raw = xi0[30];
+      rd68884_ucode_pkg::COND_K_GT17:     cond_raw = ~mask[6] & (mask[5:0] > 6'd17);
+      rd68884_ucode_pkg::COND_K_POS:      cond_raw = ~mask[6] & (mask[5:0] != 6'd0);
+      rd68884_ucode_pkg::COND_Q_ODD:      cond_raw = c[0];
       default:                            cond_raw = 1'b0;
     endcase
     cond = cond_raw ^ f_neg;
@@ -721,10 +751,12 @@ module rd68884_seq (
     endcase
   end
 
-  logic rf_we, rf_re;
+  logic rf_we, rf_re, cr_re;
   assign rf_we = ~trap & (f_rf == rd68884_ucode_pkg::RF_WRITE);
   assign rf_re = ~trap & (f_rf == rd68884_ucode_pkg::RF_READ);
+  assign cr_re = ~trap & (f_rf == rd68884_ucode_pkg::RF_CROM);
 
+  logic [90:0] rf_q;
   rd68884_regfile u_rf (
       .clk(clk),
       .we (rf_we),
@@ -732,8 +764,32 @@ module rd68884_seq (
       .wd ({a_sign, a_exp, a_mant}),
       .re (rf_re),
       .ra (rf_addr),
-      .q  (rfq)
+      .q  (rf_q)
   );
+
+  // The constant ROM, at IMM + an offset (tools/ucode/fields.py, RF CROM).
+  logic [6:0] cr_off;
+  logic [8:0] cr_addr;
+  always_comb begin
+    case (f_rfa)
+      rd68884_ucode_pkg::RFA_CMD: cr_off = cmd[6:0];
+      rd68884_ucode_pkg::RFA_ELO: cr_off = {1'b0, a_exp[5:0]};
+      rd68884_ucode_pkg::RFA_EHI: cr_off = a_exp[12:6];
+      default:                    cr_off = 7'd0;
+    endcase
+    cr_addr = f_imm[8:0] + {2'd0, cr_off};
+  end
+
+  logic [91:0] cr_q;
+  rd68884_crom u_crom (
+      .clk (clk),
+      .re  (cr_re),
+      .addr(cr_addr),
+      .q   (cr_q)
+  );
+
+  assign rfq  = q_crom ? cr_q[90:0] : rf_q;
+  assign qstk = q_crom & cr_q[91];
 
   // ==========================================================================
   // To the BIU
@@ -816,7 +872,7 @@ module rd68884_seq (
   logic        an_sign, bn_sign;
   logic [17:0] an_exp, bn_exp;
   logic [71:0] an_mant, bn_mant;
-  logic [79:0] cn;
+  logic [87:0] cn;
   logic [3:0]  rxn;
   logic        stkn, stkbn, rinexn;
   logic [6:0]  san;
@@ -829,7 +885,7 @@ module rd68884_seq (
 
     case (f_asrc)
       rd68884_ucode_pkg::ASRC_RFQ: begin
-        an_sign = rfq[90];  an_exp = rfq[89:72];  an_mant = rfq[71:0];
+        an_sign = rfq[90];  an_exp = rfq[89:72];  an_mant = rfq[71:0];  stkn = stk | qstk;
       end
       rd68884_ucode_pkg::ASRC_UNPACKX: begin
         an_sign = xi0[31];  an_exp = ux_exp;  an_mant = {xi1, xi2, 8'd0};
@@ -903,7 +959,7 @@ module rd68884_seq (
       rd68884_ucode_pkg::MOP_TRUNCA: an_mant = a_mant & ~lowmask;
       rd68884_ucode_pkg::MOP_TRUNCB: bn_mant = b_mant & ~lowmask;
       rd68884_ucode_pkg::MOP_CLRQ: begin
-        cn = 80'd0;  rxn = 4'd0;  stkn = 1'b0;
+        cn = 88'd0;  rxn = 4'd0;  stkn = 1'b0;
       end
       rd68884_ucode_pkg::MOP_CLRAM: an_mant = 72'd0;
       rd68884_ucode_pkg::MOP_MULSTEP: begin
@@ -911,6 +967,9 @@ module rd68884_seq (
         stkn = stk | (c[15:0] != 16'd0);
         bn_mant = {16'd0, b_mant[71:16]};
       end
+      rd68884_ucode_pkg::MOP_MUL10,
+      rd68884_ucode_pkg::MOP_ADDDIG: an_mant = add_s[71:0];
+      rd68884_ucode_pkg::MOP_QINC:   cn = {c[87:7], c[6:0] + 7'd1};
       rd68884_ucode_pkg::MOP_MULFIN: begin
         if (c[79]) begin
           an_mant = c[79:8];  an_exp = a_exp + 18'd1;  stkn = stk | (c[7:0] != 8'd0);
@@ -919,7 +978,7 @@ module rd68884_seq (
         end
       end
       rd68884_ucode_pkg::MOP_DIVSTEP: begin
-        cn = {c[78:0], div_q};
+        cn = {8'd0, c[78:0], div_q};
         an_mant = {div_rr[70:0], 1'b0};
         rxn = div_rr[74:71];
       end
@@ -933,7 +992,7 @@ module rd68884_seq (
       end
       rd68884_ucode_pkg::MOP_SQSTEP: begin
         bn_mant = {b_mant[69:0], 2'b00};
-        cn = {c[78:0], sq_q};
+        cn = {8'd0, c[78:0], sq_q};
         an_mant = sq_rr[71:0];
         rxn = sq_rr[75:72];
       end
@@ -971,6 +1030,15 @@ module rd68884_seq (
       rd68884_ucode_pkg::EOP_SA_IMM:  san = f_imm[6:0];
       rd68884_ucode_pkg::EOP_LDEMIN:  an_exp = emin;
       rd68884_ucode_pkg::EOP_HALF:    an_exp = {a_exp[17], a_exp[17:1]};
+      rd68884_ucode_pkg::EOP_LDB:     an_exp = b_exp;
+      rd68884_ucode_pkg::EOP_ADDBI:   an_exp = b_sign ? (a_exp - {2'd0, b_mant[23:8]})
+                                                      : (a_exp + {2'd0, b_mant[23:8]});
+      rd68884_ucode_pkg::EOP_NEGE:    an_exp = 18'd0 - a_exp;
+      rd68884_ucode_pkg::EOP_EXP10:   an_exp = {a_exp[14:0], 3'd0} + {a_exp[16:0], 1'b0}
+                                               + {14'd0, xi0[27:24]};
+      rd68884_ucode_pkg::EOP_LOG10:   an_exp = log10_e;
+      rd68884_ucode_pkg::EOP_LDK:     an_exp = {{11{mask[6]}}, mask[6:0]};
+      rd68884_ucode_pkg::EOP_SUBK:    an_exp = a_exp - {{11{mask[6]}}, mask[6:0]};
       default: ;
     endcase
 
@@ -979,6 +1047,7 @@ module rd68884_seq (
       rd68884_ucode_pkg::SGN_ABS: an_sign = 1'b0;
       rd68884_ucode_pkg::SGN_XOR: an_sign = a_sign ^ b_sign;
       rd68884_ucode_pkg::SGN_RMZ: an_sign = (rmr == RM);
+      rd68884_ucode_pkg::SGN_XI0: an_sign = xi0[31];
       default: ;
     endcase
 
@@ -996,6 +1065,8 @@ module rd68884_seq (
       rd68884_ucode_pkg::RMR_RZ:   rmrn = RZ;
       default: ;
     endcase
+
+    if (f_flag == rd68884_ucode_pkg::FLAG_SET_STK) stkn = 1'b1;
   end
 
   // FPSR: the bus, then the condition codes and the EXC clear, then the flags
@@ -1013,6 +1084,8 @@ module rd68884_seq (
       fpsr_nxt[7:3] = fpsr_nxt[7:3] | {|exc[7:5], exc[4], exc[3] & exc[1], exc[2],
                                        exc[4] | exc[1] | exc[0]};
     if (f_fpsr == rd68884_ucode_pkg::FPSR_CCIMM) fpsr_nxt[27:24] = f_imm[3:0];
+    if (f_fpsr == rd68884_ucode_pkg::FPSR_QSIGN) fpsr_nxt[23]    = a_sign ^ b_sign;
+    if (f_fpsr == rd68884_ucode_pkg::FPSR_QBITS) fpsr_nxt[22:16] = c[6:0];
     fpsr_nxt[15:8] = fpsr_nxt[15:8] | f_excset;
     if (f_flag == rd68884_ucode_pkg::FLAG_BSUN)  fpsr_nxt = fpsr_nxt | 32'h0000_8080;
     if (f_flag == rd68884_ucode_pkg::FLAG_RESET) fpsr_nxt = 32'd0;
@@ -1046,7 +1119,8 @@ module rd68884_seq (
       b_sign        <= 1'b0;
       b_exp         <= -18'sd16383;
       b_mant        <= 72'd0;
-      c             <= 80'd0;
+      c             <= 88'd0;
+      q_crom        <= 1'b0;
       rxq           <= 4'd0;
       stk           <= 1'b0;
       stkb          <= 1'b0;
@@ -1106,6 +1180,8 @@ module rd68884_seq (
         c      <= cn;
         rxq    <= rxn;
         stk    <= stkn;
+        if (cr_re)      q_crom <= 1'b1;
+        else if (rf_re) q_crom <= 1'b0;
         stkb   <= stkbn;
         sa     <= san;
         rinex  <= rinexn;
@@ -1127,6 +1203,24 @@ module rd68884_seq (
           rd68884_ucode_pkg::XOP_PACKI:   xi0 <= pi_q;
           rd68884_ucode_pkg::XOP_PACKNI:  xi0 <= pni_q;
           rd68884_ucode_pkg::XOP_PACKSAT: xi0 <= psat_q;
+          rd68884_ucode_pkg::XOP_DIGL: begin
+            xi0[3:0] <= xi1[31:28];
+            xi1      <= {xi1[27:0], xi2[31:28]};
+            xi2      <= {xi2[27:0], 4'd0};
+          end
+          rd68884_ucode_pkg::XOP_EDIGL:   xi0[27:16] <= {xi0[23:16], 4'd0};
+          rd68884_ucode_pkg::XOP_DIGR: begin
+            xi0[3:0] <= dig;
+            xi1      <= mdig[67:36];
+            xi2      <= mdig[35:4];
+          end
+          rd68884_ucode_pkg::XOP_EDIGR:   xi0[27:16] <= {dig, xi0[27:20]};
+          rd68884_ucode_pkg::XOP_EDIG3:   xi0[15:12] <= dig;
+          rd68884_ucode_pkg::XOP_PINIT: begin
+            xi0 <= {a_sign, a_exp[17], 30'd0};
+            xi1 <= 32'd0;
+            xi2 <= 32'd0;
+          end
           default: ;
         endcase
 
@@ -1135,6 +1229,8 @@ module rd68884_seq (
           ctr <= f_imm;
         end else if (f_ctr == rd68884_ucode_pkg::CTR_DEC) begin
           ctr <= ctr - 16'd1;
+        end else if (f_ctr == rd68884_ucode_pkg::CTR_LOADE) begin
+          ctr <= a_exp[15:0];
         end
         if (f_seq == rd68884_ucode_pkg::SEQ_LOOP && ctr != 16'd0) begin
           ctr <= ctr - 16'd1;

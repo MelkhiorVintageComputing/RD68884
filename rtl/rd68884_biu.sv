@@ -544,6 +544,13 @@ module rd68884_biu (
       // The sequencer's writes come first in the source and the bus events
       // after them, so that in a clock where both touch a register the bus
       // wins only where it should (see each).
+      // A split read's first part takes its snapshot of the response now;
+      // a write in this same clock comes after it, so the write's dirty
+      // mark must win (else the second part would consume a one-shot
+      // primitive the main processor never saw).
+      if (take && first_part && is_resp) begin
+        resp_dirty_q <= 1'b0;
+      end
       if (resp_we_i && !(resp_cond_i && (cmd_pend_q || ev_cmd))) begin
         resp_q       <= resp_i;
         oneshot_q    <= resp_oneshot_i;
@@ -563,9 +570,6 @@ module rd68884_biu (
         end else begin
           oplen_q <= 2'd0;
         end
-      end
-      if (take && first_part && is_resp) begin
-        resp_dirty_q <= 1'b0;
       end
       if (cmd_ack_i)  cmd_pend_q  <= 1'b0;
       if (opw_ack_i)  opw_valid_q <= 1'b0;

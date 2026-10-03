@@ -17,8 +17,7 @@ program on the MC68020 driver --
     <the instruction>                    FP0 to FP1, <ea> to FP1, or FP0 to (A0)
     FMOVE.L FPSR,D0; FMOVE.L #0,FPCR; FMOVE.X FP1,(A1)
 
--- so the dialogs, the unpacking and the packing are in the path too. The
-remainder checks wait for M6.
+-- so the dialogs, the unpacking and the packing are in the path too.
 """
 
 import os
@@ -81,9 +80,6 @@ class Iss:
 def main():
     iss = Iss()
     T.run = iss.run
-    # FREM arrives with M6; until then the microcode answers it F-line.
-    every = T.checks
-    T.checks = lambda: [c for c in every() if not c[0].endswith('_rem')]
     return T.main()
 
 

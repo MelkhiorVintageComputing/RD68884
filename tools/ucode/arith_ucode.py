@@ -17,6 +17,12 @@ precision and rounding mode registers) are set once per instruction. STK is
 the sticky bit below A's mantissa; every instruction clears it first.
 """
 
+import crom
+import packed_ucode
+
+# Register-file temporaries (entries 16 and up, doc/microcode.md).
+T_X, T_Y, T_ILOG, T_LEN, T_S, T_HI, T_Q = 16, 17, 18, 19, 20, 21, 22
+
 # Exception byte bits, FPU figure 6-1.
 BSUN, SNAN, OPERR, OVFL, UNFL, DZ, INEX2, INEX1 = (1 << b for b in range(7, -1, -1))
 
@@ -25,7 +31,8 @@ BSUN, SNAN, OPERR, OVFL, UNFL, DZ, INEX2, INEX1 = (1 << b for b in range(7, -1, 
 OPS = {0x00: 'op_fmove', 0x01: 'op_fint', 0x03: 'op_fintrz', 0x04: 'op_fsqrt',
        0x18: 'op_fabs', 0x1A: 'op_fneg', 0x1E: 'op_fgetexp', 0x1F: 'op_fgetman',
        0x20: 'op_fdiv', 0x22: 'op_fadd', 0x23: 'op_fmul', 0x24: 'op_fsgldiv',
-       0x27: 'op_fsglmul', 0x28: 'op_fsub', 0x38: 'op_fcmp', 0x3A: 'op_ftst'}
+       0x27: 'op_fsglmul', 0x28: 'op_fsub', 0x38: 'op_fcmp', 0x3A: 'op_ftst',
+       0x21: 'op_fmod', 0x25: 'op_frem', 0x26: 'op_fscale'}
 ALIAS = {0x05: 0x04, 0x1B: 0x1A, 0x39: 0x38}
 for _c in range(0x29, 0x30):
     ALIAS[_c] = 0x28
@@ -42,6 +49,8 @@ def emit(p):
     L('op_rr')
     u(SEQ='DISP', IDX='OPMODE', TGT='t_supp')
     L('op_mem')
+    u(SEQ='DISP', IDX='RX', TGT='t_memsrc', comment='source specifier 111 is FMOVECR')
+    L('op_mem_g')
     u(SEQ='DISP', IDX='OPMODE', TGT='t_supp')
     L('arith_ok')
     u(PSR='FPCR', RMR='FPCR', FPSR='CLREXC', MOP='CLRQ',
@@ -59,7 +68,8 @@ def emit(p):
     # ---- the source, <ea>: FPU table 4-14, primitives table 7-5 -----------
     L('src_mem')
     u(SEQ='DISP', IDX='RX', TGT='t_memfmt')
-    for fmt, prim, nl, unpack in (('l', 0x9504, 1, 'UNPACKL'), ('s', 0x9504, 1, 'UNPACKS'),
+    for fmt, prim, nl, unpack in (('p', 0x960C, 3, None),
+                                  ('l', 0x9504, 1, 'UNPACKL'), ('s', 0x9504, 1, 'UNPACKS'),
                                   ('x', 0x960C, 3, 'UNPACKX'), ('w', 0x9502, 1, 'UNPACKW'),
                                   ('d', 0x9608, 2, 'UNPACKD'), ('b', 0x9501, 1, 'UNPACKB')):
         L(f'm_{fmt}')
@@ -69,8 +79,21 @@ def emit(p):
         for k in range(nl):
             u(SEQ='WAIT', COND='OPW_VALID')
             u(BIU='OPW_ACK', TSRC='OPW', TDST=f'XI{k}')
-        u(RESP='WR', IMM=0x0900, EXPECT='CMD', ASRC=unpack, SEQ='JUMP', TGT='src_norm',
-          comment='release')
+        if unpack is None:
+            u(RESP='WR', IMM=0x0900, EXPECT='CMD', SEQ='JUMP', TGT='pin', comment='release')
+        else:
+            u(RESP='WR', IMM=0x0900, EXPECT='CMD', ASRC=unpack, SEQ='JUMP', TGT='src_norm',
+              comment='release')
+
+    # ---- FMOVECR, FPU 4.6: the constant, rounded as any result ----------
+    L('movecr')
+    u(PSR='FPCR', RMR='FPCR', FPSR='CLREXC', MOP='CLRQ')
+    u(RESP='WR', IMM=0x0900, ORS='PC', EXPECT='CMD', comment='as register to register')
+    u(RF='CROM', RFA='CMD', IMM=crom.CR_MOVECR)
+    u(SEQ='WAIT', COND='RESP_READ', ASRC='RFQ', comment='STK <= the constant\'s sticky bit')
+    u(SEQ='BR', COND='A_ZERO', TGT='finish')
+    u(SEQ='CALL', TGT='post')
+    u(SEQ='JUMP', TGT='finish')
 
     # Normalise the source (FPU 3.5.1): denormals and unnormals; an
     # unnormalised zero becomes a true zero; an infinity drops its integer bit.
@@ -406,7 +429,21 @@ def emit(p):
     u(SEQ='CALL', TGT='post')
     u(SEQ='JUMP', TGT='finish')
 
-    # FMUL and FSGLMUL: 64 x 16 a clock, four clocks (doc/microcode.md).
+    # The cores, for any finite non-zero normalised operands, the sticky bit
+    # in STK: mulc A = A x B, 72 x 16 a clock, five clocks; divc A = A / B,
+    # one quotient bit a clock (doc/microcode.md).
+    L('mulc')
+    u(SGN='XOR', EOP='ADDB', MOP='CLRQ')
+    for _ in range(5):
+        u(MOP='MULSTEP')
+    u(MOP='MULFIN', SEQ='RET')
+    L('divc')
+    u(EOP='SUBB', MOP='CLRQ', CTR='LOAD', IMM=73)
+    L('div_loop')
+    u(SEQ='LOOP', TGT='div_loop', MOP='DIVSTEP')
+    u(MOP='DIVFIN', SEQ='RET')
+
+    # FMUL and FSGLMUL.
     L('op_fsglmul')
     u(SEQ='CALL', TGT='load_dst')
     u(SEQ='BR', COND='A_NAN', TGT='nan2')
@@ -423,10 +460,8 @@ def emit(p):
     u(SEQ='BR', COND='B_INF', TGT='mul_binf')
     u(SEQ='BR', COND='A_ZERO', TGT='mul_zero')
     u(SEQ='BR', COND='B_ZERO', TGT='mul_zero')
-    u(SGN='XOR', EOP='ADDB', MOP='CLRQ')
-    for _ in range(4):
-        u(MOP='MULSTEP')
-    u(MOP='MULFIN', SEQ='CALL', TGT='post')
+    u(SEQ='CALL', TGT='mulc')
+    u(SEQ='CALL', TGT='post')
     u(SEQ='JUMP', TGT='finish')
     L('mul_ainf')
     u(SEQ='BR', COND='B_ZERO', TGT='operr')
@@ -437,7 +472,7 @@ def emit(p):
     L('mul_zero')
     u(SGN='XOR', MOP='ZEROM', SEQ='JUMP', TGT='finish')
 
-    # FDIV and FSGLDIV: one quotient bit a clock (doc/microcode.md).
+    # FDIV and FSGLDIV.
     L('op_fsgldiv')
     u(SEQ='CALL', TGT='load_dst')
     u(SEQ='BR', COND='A_NAN', TGT='nan2')
@@ -455,10 +490,8 @@ def emit(p):
     u(SEQ='BR', COND='B_INF', TGT='div_inf')
     u(SEQ='BR', COND='B_ZERO', TGT='div_zero')
     u(ASRC='B', BSRC='A', SGN='XOR', comment='A = dividend (FPn), B = divisor')
-    u(EOP='SUBB', MOP='CLRQ', CTR='LOAD', IMM=73)
-    L('div_loop')
-    u(SEQ='LOOP', TGT='div_loop', MOP='DIVSTEP')
-    u(MOP='DIVFIN', SEQ='CALL', TGT='post')
+    u(SEQ='CALL', TGT='divc')
+    u(SEQ='CALL', TGT='post')
     u(SEQ='JUMP', TGT='finish')
     L('div_azero')
     u(SEQ='BR', COND='B_ZERO', TGT='operr')
@@ -470,6 +503,100 @@ def emit(p):
     u(SEQ='BR', COND='B_INF', TGT='operr')
     L('div_zero')
     u(SGN='XOR', MOP='ZEROM', SEQ='JUMP', TGT='finish')
+
+    # FSCALE (FPU 4.6): FPn x 2^int(source), the integer part by truncation.
+    # From 2^14 up an overflow or underflow is certain (the FSCALE text):
+    # the exponent goes far enough out that ETEMP is catastrophic too.
+    L('op_fscale')
+    u(SEQ='CALL', TGT='load_dst')
+    u(SEQ='BR', COND='A_NAN', TGT='nan2')
+    u(SEQ='BR', COND='B_NAN', TGT='nan2')
+    u(SEQ='BR', COND='A_INF', TGT='operr')
+    u(SEQ='BR', COND='A_ZERO', TGT='sc_dst')
+    u(SEQ='BR', COND='B_ZERO', TGT='sc_dst')
+    u(SEQ='BR', COND='B_INF', TGT='sc_dst')
+    u(SEQ='BR', COND='AE_GE_IMM', IMM=14, TGT='sc_huge')
+    u(EOP='SA_IA', IMM=63)
+    u(MOP='SHRA', comment='the integer part, at bit 8')
+    u(ASRC='B', BSRC='A', comment='A = FPn, B = the integer')
+    u(EOP='ADDBI', SEQ='CALL', TGT='post')
+    u(SEQ='JUMP', TGT='finish')
+    L('sc_dst')
+    u(ASRC='B')
+    u(SEQ='BR', COND='A_ZERO', TGT='finish')
+    u(SEQ='BR', COND='A_INF', TGT='finish')
+    u(SEQ='CALL', TGT='post')
+    u(SEQ='JUMP', TGT='finish')
+    L('sc_huge')
+    u(SEQ='BR', COND='A_SIGN', TGT='sc_under')
+    u(ASRC='B', EOP='LDI', IMM=0x7FFF)
+    u(EOP='ADDI', IMM=0x7FFF, SEQ='CALL', TGT='post')
+    u(SEQ='JUMP', TGT='finish')
+    L('sc_under')
+    u(ASRC='B', EOP='LDI', IMM=-0x7FFF & 0xFFFF)
+    u(EOP='ADDI', IMM=-0x7FFF & 0xFFFF, SEQ='CALL', TGT='post')
+    u(SEQ='JUMP', TGT='finish')
+
+    # FMOD and FREM (FPU 4.6): the exact remainder of the quotient rounded
+    # toward zero, or to nearest (even on a tie), and the quotient byte.
+    # Restoring division one bit a clock, as many as the exponents differ
+    # (doc/microcode.md); the remainder is exact, then rounded as any result.
+    for name, nearest in (('op_fmod', False), ('op_frem', True)):
+        pre = name[3:]
+        L(name)
+        u(SEQ='CALL', TGT='load_dst', comment='A = source y, B = FPn x')
+        u(SEQ='BR', COND='A_NAN', TGT='nan2')
+        u(SEQ='BR', COND='B_NAN', TGT='nan2')
+        u(SEQ='BR', COND='A_ZERO', TGT='operr')
+        u(SEQ='BR', COND='B_INF', TGT='operr')
+        u(FPSR='QSIGN', comment='the quotient\'s sign')
+        u(FPSR='QBITS', comment='C is clear: no bits yet')
+        u(SEQ='BR', COND='B_ZERO', TGT='res_b')
+        u(SEQ='BR', COND='A_INF', TGT='res_b_post')
+        u(SGN='ABS')
+        u(RF='WRITE', RFA='IMM', IMM=T_Y, comment='|y|')
+        u(ASRC='B', BSRC='A', comment='A = x, B = |y|')
+        u(RF='WRITE', RFA='IMM', IMM=T_X, SGN='ABS', comment='x; A = |x|')
+        u(SEQ='BR', COND='AE_LT_B', TGT=f'{pre}_r')
+        u(EOP='SUBB', comment='the exponents\' difference')
+        u(CTR='LOADE', MOP='CLRQ')
+        L(f'{pre}_loop')
+        u(SEQ='LOOP', TGT=f'{pre}_loop', MOP='DIVSTEP')
+        u(EOP='LDB', comment='{RX, A} is twice the remainder, in units of y\'s LSB')
+        u(EOP='ADDI', IMM=0xFFFF)
+        u(MOP='RSH1')
+        L(f'{pre}_r')
+        u(SEQ='BR', COND='A_ZERO', TGT=f'{pre}_out')
+        u(MOP='NORM')
+        if nearest:
+            # Round the quotient to nearest: if 2r > y, or 2r = y with the
+            # quotient odd, the remainder is r - y and the quotient one more.
+            u(EOP='ADDI', IMM=1, comment='2r')
+            u(SEQ='BR', COND='B_LT_A', TGT='rem_adj')
+            u(SEQ='BR', NEG=1, COND='B_EQ_A', TGT='rem_noadj')
+            u(SEQ='BR', COND='Q_ODD', TGT='rem_adj')
+            L('rem_noadj')
+            u(EOP='ADDI', IMM=0xFFFF, SEQ='JUMP', TGT='rem_out')
+            L('rem_adj')
+            u(EOP='ADDI', IMM=0xFFFF)
+            u(ASRC='B', BSRC='A', comment='A = |y|, B = r: y - r is exact')
+            u(EOP='SA_AB')
+            u(MOP='SHRB')
+            u(MOP='SUB')
+            u(MOP='NORM')
+            u(SGN='NEG', MOP='QINC', comment='the opposite sign; the quotient + 1')
+        L(f'{pre}_out')
+        if not nearest:
+            u(SEQ='JUMP', TGT='rem_out')
+    L('rem_out')
+    u(FPSR='QBITS', RF='READ', RFA='IMM', IMM=T_X)
+    u(BSRC='RFQ')
+    u(SGN='XOR', comment='the sign of x, flipped by the adjustment')
+    u(SEQ='BR', COND='A_ZERO', TGT='rem_zero')
+    u(SEQ='CALL', TGT='post')
+    u(SEQ='JUMP', TGT='finish')
+    L('rem_zero')
+    u(MOP='ZEROM', SEQ='JUMP', TGT='finish', comment='a zero takes the sign of x')
 
     # FCMP (FPU 4.6): only the condition codes, from the operation table.
     L('op_fcmp')
@@ -505,13 +632,24 @@ def emit(p):
     # =========================================================================
     L('op_out')
     u(SEQ='DISP', IDX='RX', TGT='t_outfmt')
-    for fmt, psr in (('l', 'X'), ('s', 'S'), ('x', 'X'), ('w', 'X'), ('d', 'D'), ('b', 'X')):
+    for fmt, psr in (('l', 'X'), ('s', 'S'), ('x', 'X'), ('w', 'X'), ('d', 'D'), ('b', 'X'),
+                     ('p', 'X')):
         L(f'o_{fmt}')
         u(RESP='WR', IMM=0x8900, ORS='PC', ONESHOT=1, EXPECT='RESP', RF='READ', RFA='RY',
           PSR=psr, RMR='FPCR', FPSR='CLREXC', MOP='CLRQ',
-          comment='null CA=1 while converting (PC if enabled)')
+          MASK='LOAD' if fmt == 'p' else 'NONE',
+          comment='null CA=1 while converting (PC if enabled)' + (
+              '; the static k-factor' if fmt == 'p' else ''))
         u(SEQ='CALL', TGT='wait_first')
         u(ASRC='RFQ', SEQ='JUMP', TGT=f'o_{fmt}_go')
+    # The dynamic k-factor: the MPU sends Dn first (FPU table 7-5).
+    L('o_pd')
+    u(RESP='WR', IMM=0x8C00, ORS='DNPC', ONESHOT=1, EXPECT='OPW', RF='READ', RFA='RY',
+      PSR='X', RMR='FPCR', FPSR='CLREXC', MOP='CLRQ', comment='transfer Dn')
+    u(SEQ='CALL', TGT='wait_first')
+    u(SEQ='WAIT', COND='OPW_VALID')
+    u(BIU='OPW_ACK', TSRC='OPW', TDST='MASK', comment='the k-factor')
+    u(ASRC='RFQ', SEQ='JUMP', TGT='o_p_go')
 
     # ---- extended: exact, a denormal signals UNFL --------------------------
     L('o_x_go')
@@ -610,5 +748,9 @@ def emit(p):
     p.table('t_op', 7, {c: OPS[ALIAS.get(c, c)] for c in range(128)
                         if ALIAS.get(c, c) in OPS}, 'fline')
     p.table('t_src', 3, {0: 'src_rr', 2: 'src_mem'}, 'fline')
-    p.table('t_memfmt', 3, {0: 'm_l', 1: 'm_s', 2: 'm_x', 4: 'm_w', 5: 'm_d', 6: 'm_b'}, 'fline')
-    p.table('t_outfmt', 3, {0: 'o_l', 1: 'o_s', 2: 'o_x', 4: 'o_w', 5: 'o_d', 6: 'o_b'}, 'fline')
+    p.table('t_memsrc', 3, {7: 'movecr'}, 'op_mem_g')
+    p.table('t_memfmt', 3, {0: 'm_l', 1: 'm_s', 2: 'm_x', 3: 'm_p', 4: 'm_w', 5: 'm_d',
+                            6: 'm_b'}, 'fline')
+    p.table('t_outfmt', 3, {0: 'o_l', 1: 'o_s', 2: 'o_x', 3: 'o_p', 4: 'o_w', 5: 'o_d',
+                            6: 'o_b', 7: 'o_pd'}, 'fline')
+    packed_ucode.emit(p)

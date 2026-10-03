@@ -166,6 +166,9 @@ module sys_tb;
     if (!$value$plusargs("image=%s", image)) image = "build/programs/fpu_m4.hex";
     if (!$value$plusargs("limit=%d", limit)) limit = 400000;
     if (!$value$plusargs("dump=%s", dump)) dump = "";
+    // Memory the image leaves out reads as zero, as on RD68021's harness:
+    // a program may count on its results block starting clear.
+    for (k = 0; k < 65536; k = k + 1) s32.mem[k] = 8'h00;
     $readmemh(image, s32.mem);
     rst_n = 1'b0;
     repeat (8) @(posedge clk);

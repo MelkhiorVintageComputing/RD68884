@@ -229,15 +229,19 @@ sim: dirs
 # ---------------------------------------------------------------------------
 RD68021 ?= ../RD68021
 CROSS   := m68k-linux-gnu-
-# fparith and fparith-dbl (below) join with M6: gcc loads 0.0 with FMOVECR.
-SYSPROGS  ?= fpu_m4 fpu_m5
+SYSPROGS  ?= fpu_m4 fpu_m5 fpu_m6 fpu fparith fparith-dbl
 SYS_PORTS ?= 32 16 8
 
-# fpu_m5's vectors come from the golden model.
+# fpu_m5's and fpu_m6's vectors come from the golden model.
 $(BUILD)/programs/fpu_m5_vec.S: sim/programs/gen_fpu_m5.py tools/model/arith.py | dirs
 	@mkdir -p $(BUILD)/programs
-	@$(PYENV) python3 sim/programs/gen_fpu_m5.py $@ 150 5
-$(BUILD)/programs/fpu_m5.hex: $(BUILD)/programs/fpu_m5_vec.S
+	@$(PYENV):$(CURDIR)/sim/programs python3 sim/programs/gen_fpu_m5.py $@ 150 5
+$(BUILD)/programs/fpu_m6_vec.S: sim/programs/gen_fpu_m6.py sim/programs/gen_fpu_m5.py \
+                                tools/model/arith.py tools/model/packed.py | dirs
+	@mkdir -p $(BUILD)/programs
+	@$(PYENV):$(CURDIR)/sim/programs python3 sim/programs/gen_fpu_m6.py $@ 120 6
+$(BUILD)/programs/fpu_m5.hex: $(BUILD)/programs/fpu_m5_vec.S sim/programs/arith_harness.inc
+$(BUILD)/programs/fpu_m6.hex: $(BUILD)/programs/fpu_m6_vec.S sim/programs/arith_harness.inc
 
 # fparith.c (copied from RD68021), twice: at extended rounding precision
 # against the host's x87, and at double against its SSE (the comment at its
@@ -272,7 +276,7 @@ $(BUILD)/programs/fparith-dbl.expect: sim/programs/fparith.c | dirs
 
 $(BUILD)/programs/%.hex: sim/programs/%.S sim/programs/flat.ld | dirs
 	@mkdir -p $(BUILD)/programs
-	@$(CROSS)as -mcpu=68020 -m68881 -I $(BUILD)/programs -o $(BUILD)/programs/$*.o $<
+	@$(CROSS)as -mcpu=68020 -m68881 -I $(BUILD)/programs -I sim/programs -o $(BUILD)/programs/$*.o $<
 	@$(CROSS)ld --no-warn-rwx-segments -T sim/programs/flat.ld -o $(BUILD)/programs/$*.elf $(BUILD)/programs/$*.o
 	@$(CROSS)objcopy -O verilog --verilog-data-width=1 $(BUILD)/programs/$*.elf $@
 
