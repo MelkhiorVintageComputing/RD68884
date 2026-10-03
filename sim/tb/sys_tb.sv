@@ -2,7 +2,8 @@
 // Copyright 2026 Romain Dolbeau
 // Source location: https://github.com/MelkhiorVintageComputing/RD68884
 
-// RD68884 -- the system: RD68021 (../RD68021, used as it stands, never edited)
+// RD68884 -- the system: RD68021 (../RD68021 at the Makefile's RD68021_REV,
+// exported to build/; used as it stands, never edited)
 // running a program from memory, with RD68884 as its coprocessor at CpID 1.
 //
 //   memory     RD68021's own slave model, a 32-bit port at $0, 64 KB

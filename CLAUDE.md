@@ -26,7 +26,7 @@ Nothing under `Inputs/` may be modified, ever.
 
 ### `../RD68021` is read-only
 
-Its tools, documents and test programs may be read, run, and copied into this repository with adaptation. Nothing in that repository is ever changed from here.
+Its tools, documents and test programs may be read, run, and copied into this repository with adaptation. Nothing in that repository is ever changed from here. The system targets use a pinned revision of it (`RD68021_REV` in the Makefile), exported by `git archive` to `build/rd68021-<rev>`, never its working tree.
 
 ### Reference implementations are oracles, not sources
 
@@ -96,6 +96,7 @@ Project documents:
 | `doc/divergences.md` | Deliberate, protocol-permitted differences from the MC68881 |
 | `doc/microcode.md` | The microcode machine: fields, timing rules, traps, the races the BIU settles |
 | `doc/model.md` | The Python reference models, how they are checked, and every choice they make where the manual is silent |
+| `doc/system.md` | SunOS 4.1.1 in TME with RD68021 and RD68884 (`make sunos`) |
 
 ## Building and checking
 
@@ -106,6 +107,7 @@ make check    # the gate: ucode-check, lint, audit, model-test, iss-test, sim
 make sim      # the directed testbenches in sim/tb
 make ucode    # regenerate rtl/gen/ from tools/ucode/ (ucode-check is part of check)
 make sys      # the system with RD68021 as the MC68020, and the RTL/ISS lockstep
+make sunos    # SunOS 4.1.1 in TME on RD68021 + RD68884, against TME's m68020/MC68881 (~15 min)
 make model-test      # the reference models' unit tests (doc/model.md)
 make testfloat       # the arithmetic model against TestFloat (make oracles builds it)
 make iss-arith       # the microcode against the model, ARITH_N random cases

@@ -10,3 +10,6 @@
 [submodule "Inputs/doc/MC68030_Doc_More_Readable"]
 	path = Inputs/doc/MC68030_Doc_More_Readable
 	url = https://github.com/MelkhiorVintageComputing/MC68030_Doc_More_Readable
+[submodule "Inputs/ref/Run-Sun3-SunOS-4.1.1"]
+	path = Inputs/ref/Run-Sun3-SunOS-4.1.1
+	url = https://github.com/phabrics/Run-Sun3-SunOS-4.1.1

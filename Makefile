@@ -50,7 +50,7 @@ IVFLAGS := -g2012 -Wall -Wno-timescale
 .PHONY: all help dirs lint lint-source lint-iverilog lint-verilator lint-yosys \
         lint-quartus lint-questa synth impl quartus audit check print-rtl clean \
         oracles model-test testfloat testfloat-full iss-testfloat iss-arith iss-trans trans-accuracy sim ucode ucode-check \
-        iss-test sys
+        iss-test rd68021 sys tme sunos
 
 all: lint
 
@@ -76,7 +76,7 @@ help:
 	@echo "  make iss-trans    the transcendentals against the model, TRANS_N cases"
 	@echo "  make trans-accuracy  the transcendentals' error in ulps, against mpmath"
 	@echo
-	@echo "The system, with RD68021 ($(RD68021)) as the MC68020:"
+	@echo "The system, with RD68021 ($(RD68021) at $(RD68021_REV)) as the MC68020:"
 	@echo "  make sys          sim/programs/fpu_m4.S on every port width, and the"
 	@echo "                    RTL sequencer against the ISS, clock by clock"
 	@echo
@@ -235,10 +235,25 @@ sim: dirs
 # ---------------------------------------------------------------------------
 # The system -- M4
 #
-# RD68021 is used where it stands (CLAUDE.md: read-only); its RTL list comes
-# from its own Makefile. Not in `check`: it needs that checkout, and minutes.
+# RD68021 is read-only (CLAUDE.md), and its checkout moves: its branch and
+# uncommitted work are its own. So one revision of it is pinned here and
+# exported, with `git archive` (which only reads the repository), to
+# build/rd68021-<rev>; everything below uses that copy. 6d91ae5 is its
+# mh882_experiment branch: master's RTL, plus the TME element's RTL-FPU
+# ("mh882") mode that `make sunos` needs. Its RTL list comes from its own
+# Makefile. Not in `check`: it needs that repository, and minutes.
 # ---------------------------------------------------------------------------
-RD68021 ?= ../RD68021
+RD68021     ?= ../RD68021
+RD68021_REV ?= 6d91ae5
+RDSRC       := $(BUILD)/rd68021-$(RD68021_REV)
+
+$(RDSRC)/.exported:
+	@test -d $(RD68021)/.git || { echo "FAIL: no RD68021 repository at $(RD68021)"; exit 1; }
+	@rm -rf $(RDSRC); mkdir -p $(RDSRC)
+	@git -C $(RD68021) archive $(RD68021_REV) | tar -x -C $(RDSRC)
+	@touch $@
+	@echo "  rd68021: $(RD68021_REV) exported to $(RDSRC)"
+rd68021: $(RDSRC)/.exported
 CROSS   := m68k-linux-gnu-
 SYSPROGS  ?= fpu_m4 fpu_m5 fpu_m6 fpu_m7 fpu_m8 fpu fparith fparith-dbl
 SYS_PORTS ?= 32 16 8
@@ -296,12 +311,11 @@ $(BUILD)/programs/%.hex: sim/programs/%.S sim/programs/flat.ld | dirs
 	@$(CROSS)ld --no-warn-rwx-segments -T sim/programs/flat.ld -o $(BUILD)/programs/$*.elf $(BUILD)/programs/$*.o
 	@$(CROSS)objcopy -O verilog --verilog-data-width=1 $(BUILD)/programs/$*.elf $@
 
-sys: ucode-check $(patsubst %,$(BUILD)/programs/%.hex,$(SYSPROGS))
-	@test -d $(RD68021) || { echo "FAIL: no RD68021 at $(RD68021)"; exit 1; }
-	@rd="$$(cd $(RD68021) && $(MAKE) -s print-rtl | sed 's#\(\S*\)#$(RD68021)/\1#g')"; \
+sys: ucode-check rd68021 $(patsubst %,$(BUILD)/programs/%.hex,$(SYSPROGS))
+	@rd="$$(cd $(RDSRC) && $(MAKE) -s print-rtl | sed 's#\(\S*\)#$(RDSRC)/\1#g')"; \
 	ok=1; for port in $(SYS_PORTS); do \
 	  iverilog $(IVFLAGS) -DSYS_PORT=$$port -o $(BUILD)/sys_tb_$$port.vvp -s sys_tb \
-	    $(RTL) $$rd $(RD68021)/sim/models/rd68021_slave.sv sim/tb/sys_tb.sv \
+	    $(RTL) $$rd $(RDSRC)/sim/models/rd68021_slave.sv sim/tb/sys_tb.sv \
 	    > $(BUILD)/sys_tb_$$port.clog 2>&1 || { grep -v $(NOTES) $(BUILD)/sys_tb_$$port.clog | head; exit 1; }; \
 	  for p in $(SYSPROGS); do \
 	    ls=""; if [ $$port = 32 ]; then ls="+lockstep=$(BUILD)/sys-$$p.lockstep"; fi; \
@@ -323,6 +337,74 @@ sys: ucode-check $(patsubst %,$(BUILD)/programs/%.hex,$(SYSPROGS))
 	    fi; \
 	  done; \
 	done; test $$ok -eq 1 && echo "PASS: sys"
+
+# ---------------------------------------------------------------------------
+# SunOS 4.1.1 with RD68884 as the FPU -- doc/system.md (M9)
+#
+# RD68021's `make sunos-mh882` with RD68884 in mh882's place: a Sun-3/160 in
+# TME (Inputs/ref/Run-Sun3-SunOS-4.1.1, copied to build/tme), booting an
+# installed SunOS from disk, on two CPUs:
+#   - TME's m68020 with its own MC68881, the reference;
+#   - RD68021's core with RD68884 on its coprocessor interface, one
+#     Verilator model (sim/tme/rd68021_tme_rd68884.sv) behind RD68021's own
+#     TME element.
+# drive.sh logs in as root, writes a C program with echo, compiles it with
+# cc -f68881 on the machine and runs it (RD68021's sim/tme/sunos-fpu.cmds).
+# The consoles must match, time stamps aside, and RD68884 must have answered
+# coprocessor instructions. The disk image is made on the host by the
+# installer in Run-Sun3-SunOS-4.1.1's diskimage/; SUNOS_IMG says where.
+# ---------------------------------------------------------------------------
+SUN3SRC   := Inputs/ref/Run-Sun3-SunOS-4.1.1
+TMEB      := $(BUILD)/tme
+TMEENV    := LTDL_LIBRARY_PATH=$(CURDIR)/$(TMEB)/inst/lib
+SUNOS_IMG ?= $(HOME)/Run-Sun3-SunOS-4.1.1/diskimage/work/sunos411-sun3.img
+SUNOSDIR  := $(BUILD)/sunos
+SUNOS_SECS ?= 21600
+# The time stamps: "Thu Sep 24 16:08:05 GMT 2026" and "Sep 24 16:08:10 sun3 ...".
+STAMPS    := sed -E 's/[A-Z][a-z]{2} [A-Z][a-z]{2} [ 0-9][0-9] [0-9:]{8} [A-Z]+ [0-9]{4}/DATE/; s/^[A-Z][a-z]{2} [ 0-9][0-9] [0-9:]{8} /STAMP /'
+
+tme: dirs rd68021
+	@test -d $(SUN3SRC)/tme-0.8_up || { echo "FAIL: no $(SUN3SRC): git submodule update --init"; exit 1; }
+	@rd="$$(cd $(RDSRC) && $(MAKE) -s print-rtl | sed 's#\(\S*\)#$(CURDIR)/$(RDSRC)/\1#g')"; \
+	  sim/tme/build.sh $(CURDIR) $(CURDIR)/$(RDSRC) $$rd $(addprefix $(CURDIR)/,$(RTL)) $(CURDIR)/$(VLT)
+
+sunos: tme
+	@test -f "$(SUNOS_IMG)" || { echo "FAIL: sunos -- no disk image at $(SUNOS_IMG); set SUNOS_IMG"; exit 1; }
+	@mkdir -p $(SUNOSDIR)
+	@python3 $(RDSRC)/tools/sun3_rom.py $(SUN3SRC)/sun3-carrera-rev-3.0.bin $(SUNOSDIR)/prom.bin
+	@sed 's/^console-device .*/console-device ttya/; s/^installed-#megs .*/installed-#megs 8/; s/^boot-device .*/boot-device sd(0,0,0)/' \
+	    $(SUN3SRC)/sun3-carrera-eeprom.txt > $(SUNOSDIR)/eeprom.txt
+	@$(TMEENV) $(TMEB)/inst/bin/tme-sun-eeprom < $(SUNOSDIR)/eeprom.txt > $(SUNOSDIR)/eeprom.bin 2>/dev/null
+	@# tme-sun-idprom makes an IDPROM only when its input is a terminal.
+	@cd $(SUNOSDIR) && script -qc "$(CURDIR)/$(TMEB)/inst/bin/tme-sun-idprom 3/150 \
+	    8:0:20:11:22:33 > sun3-idprom.bin" /dev/null
+	@mapfile -t C < $(RDSRC)/sim/tme/sunos-fpu.cmds; \
+	for cpu in m68020 rd68021; do \
+	  d=$(SUNOSDIR)/$$cpu; rm -rf $$d; mkdir -p $$d; \
+	  cp $(SUNOSDIR)/prom.bin $(SUNOSDIR)/sun3-idprom.bin $$d/; \
+	  cp $(SUNOSDIR)/eeprom.bin $$d/sun3-eeprom.bin; \
+	  cp --sparse=always "$(SUNOS_IMG)" $$d/disk.img; \
+	  arg="tme/ic/m68020 fpu-type m68881 fpu-compliance unknown fpu-incomplete line-f"; \
+	  [ $$cpu = rd68021 ] && arg="tme/ic/rd68021 log rd68021.log fpu mh882"; \
+	  sed "s|@CPU@|$$arg|" $(RDSRC)/sim/tme/SUNOS-DISK.in > $$d/SUNOS; \
+	  (cd $$d && PROMPT='login: *|# *' T=$(CURDIR)/$(TMEB)/inst \
+	      $(CURDIR)/$(RDSRC)/sim/tme/drive.sh SUNOS $(SUNOS_SECS) "$${C[@]}" > /dev/null 2>&1); \
+	  tr -d '\r\000' < $$d/console.out | LC_ALL=C tr '\200-\377' '\000-\177' \
+	    | $(STAMPS) > $$d/console.txt; \
+	done
+	@grep 'MH882:' $(SUNOSDIR)/rd68021/rd68021.log | tail -1 | sed 's/MH882/RD68884/; s/^/  /'
+	@grep '^rd68021: [0-9]' $(SUNOSDIR)/rd68021/rd68021.log | tail -1 | sed 's/^/  /'
+	@if cmp -s $(SUNOSDIR)/m68020/console.txt $(SUNOSDIR)/rd68021/console.txt \
+	    && tail -c 2 $(SUNOSDIR)/rd68021/console.txt | grep -q '^# $$' \
+	    && grep 'MH882:' $(SUNOSDIR)/rd68021/rd68021.log | tail -1 \
+	       | grep -qv ' 0 general and 0 conditional'; then \
+	  sed -n '/# \.\/t/,$$p' $(SUNOSDIR)/rd68021/console.txt | sed 's/^/    /'; echo; \
+	  echo "  sunos: $$(wc -l < $(SUNOSDIR)/rd68021/console.txt) lines of console output identical to TME's m68020 with its MC68881, time stamps aside"; \
+	  echo "PASS: sunos"; \
+	else \
+	  echo "FAIL: sunos -- the console output differs, or no coprocessor instruction ran"; \
+	  diff $(SUNOSDIR)/m68020/console.txt $(SUNOSDIR)/rd68021/console.txt | head -20; exit 1; \
+	fi
 
 # ---------------------------------------------------------------------------
 # The gate

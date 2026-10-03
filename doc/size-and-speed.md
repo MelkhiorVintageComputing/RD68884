@@ -21,6 +21,8 @@ Size is the project's first goal (CLAUDE.md), so every milestone records what it
 | M7 size pass | synth | 4380 | 911 | 6 | 20 | WNS +5.31 ns at 20 ns | −791 LUTs, see below |
 | M7 size pass | impl | 4363 | 911 | 6 | 20 | 54.5 MHz (18.35 ns) | limited by microword → `A`'s exponent, 34 levels |
 | M8 busy frames | synth | 4441 | 915 | 6 | 21 | WNS +5.69 ns at 20 ns | +61 LUTs: `SEQST` (the return stack's top into TBUS, and the push), `REST_BUSY`; 3128 microcode words |
+| M9 | impl | 4349 | 915 | 6 | 21 | 55.4 MHz (18.04 ns) | the final design; limited by microword → `A`'s exponent, 36 levels. 21% of the 35T's LUTs, 2% of its flip-flops, 7% of its DSPs, 42% of its block RAM |
+| M9 | Quartus fit | 5,770 ALMs | 1,189 | 5 | 64 M10K | — | `make quartus`, for portability: 18% of the device |
 
 M5 notes:
 - The utilisation-by-hierarchy report puts most of these LUTs in `u_rom`. Vivado has optimised across the ROM's boundary, so its outputs are decoded control rather than the 116 stored bits: the instance has 613 output pins and no flip-flops of its own besides the 3 RAMB36. Only the total is meaningful.
