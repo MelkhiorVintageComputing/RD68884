@@ -314,15 +314,9 @@ module rd68884_seq (
     a_cc = {a_sign, ~a_special & (a_mant[71:8] == 64'd0), a_inf, a_nan};
   end
 
-  // ---- the precision: rounding position, exponent range -----------------------
-  logic [71:0] lowmask;         // the bits below the precision's LSB
+  // ---- the precision: the exponent range ---------------------------------
   logic [17:0] emin, emax;
   always_comb begin
-    case (psr)
-      P_S, P_SGLX: lowmask = {24'd0, {48{1'b1}}};
-      P_D:         lowmask = {53'd0, {19{1'b1}}};
-      default:     lowmask = {64'd0, 8'hFF};
-    endcase
     case (psr)
       P_S:     begin emin = -18'sd126;   emax = 18'd127;   end
       P_D:     begin emin = -18'sd1022;  emax = 18'd1023;  end
@@ -357,19 +351,6 @@ module rd68884_seq (
     if (sa_d[18])                 sa_clamped = 7'd0;
     else if (sa_d[17:7] != 11'd0) sa_clamped = 7'd127;
     else                          sa_clamped = sa_d[6:0];
-  end
-
-  // ---- FCMP's comparison, B (the destination) against A (FPU 4.6) -------------
-  logic mag_lt, mag_eq, b_lt_a, b_eq_a;
-  always_comb begin
-    mag_lt = {~b_exp[17], b_exp[16:0], b_mant} <  {~a_exp[17], a_exp[16:0], a_mant};
-    mag_eq = {b_exp, b_mant} == {a_exp, a_mant};
-    b_eq_a = (a_zero & b_zero) | ((a_sign == b_sign) & mag_eq);
-    if (a_zero & b_zero)       b_lt_a = 1'b0;
-    else if (a_sign != b_sign) b_lt_a = b_sign;
-    else if (b_zero)           b_lt_a = ~a_sign;
-    else if (a_zero)           b_lt_a = a_sign;
-    else                       b_lt_a = a_sign ? (~mag_lt & ~mag_eq) : mag_lt;
   end
 
   // ---- integers: the width of the command word's format (FPU table 4-15) ------
@@ -556,6 +537,7 @@ module rd68884_seq (
   //   DIVSTEP  {RX, A} - B              SQSTEP   (4R + the radicand's next two
   //                                              bits) - (4 root + 1)
   //   MUL10    8A + 2A                  ADDDIG   A + the digit at XI0[3:0]
+  //   CMPM     A - B, for its sign and whether it is zero
   // A subtraction's sign is bit 78; ADD's and ROUND's carry, SUB's borrow,
   // bit 72.
   logic [78:0] add_x, add_y, add_s;
@@ -583,6 +565,9 @@ module rd68884_seq (
       end
       rd68884_ucode_pkg::MOP_SQSTEP: begin
         add_x = {1'b0, sq_r2};  add_y = ~{1'b0, c[75:0], 2'b01};  add_cin = 1'b1;
+      end
+      rd68884_ucode_pkg::MOP_CMPM: begin
+        add_y = ~{7'd0, b_mant};  add_cin = 1'b1;
       end
       rd68884_ucode_pkg::MOP_MUL10: begin
         add_x = {7'd0, a_mant[68:0], 3'd0};  add_y = {7'd0, a_mant[70:0], 1'b0};
@@ -703,8 +688,8 @@ module rd68884_seq (
       rd68884_ucode_pkg::COND_OVF_INF:    cond_raw = (rmr == RN) | ((rmr == RM) & a_sign) |
                                                      ((rmr == RP) & ~a_sign);
       rd68884_ucode_pkg::COND_INT_OVF:    cond_raw = int_ovf;
-      rd68884_ucode_pkg::COND_B_LT_A:     cond_raw = b_lt_a;
-      rd68884_ucode_pkg::COND_B_EQ_A:     cond_raw = b_eq_a;
+      rd68884_ucode_pkg::COND_AE_EQ_B:    cond_raw = (a_exp == b_exp);
+      rd68884_ucode_pkg::COND_RX1:        cond_raw = rxq[1];
       rd68884_ucode_pkg::COND_TRAP:       cond_raw = trap_any;
       rd68884_ucode_pkg::COND_SUPPRESS:   cond_raw = |(exc & en & 8'h64);
       rd68884_ucode_pkg::COND_PREC_X:     cond_raw = (psr == P_X);
@@ -778,6 +763,7 @@ module rd68884_seq (
       rd68884_ucode_pkg::RFA_ELO: cr_off = {4'd0, a_exp[5:0]};
       rd68884_ucode_pkg::RFA_EHI: cr_off = {3'd0, a_exp[12:6]};
       rd68884_ucode_pkg::RFA_EXP: cr_off = a_exp[9:0];
+      rd68884_ucode_pkg::RFA_PSR: cr_off = {8'd0, psr};
       default:                    cr_off = 10'd0;
     endcase
     cr_addr = f_imm[10:0] + {1'b0, cr_off};
@@ -959,12 +945,10 @@ module rd68884_seq (
         rinexn  = rnd_inexact;
         stkn    = 1'b0;
       end
-      rd68884_ucode_pkg::MOP_TRUNCA: an_mant = a_mant & ~lowmask;
-      rd68884_ucode_pkg::MOP_TRUNCB: bn_mant = b_mant & ~lowmask;
+      rd68884_ucode_pkg::MOP_CMPM:   rxn = {2'd0, (add_s[71:0] == 72'd0), add_s[78]};
       rd68884_ucode_pkg::MOP_CLRQ: begin
         cn = 88'd0;  rxn = 4'd0;  stkn = 1'b0;
       end
-      rd68884_ucode_pkg::MOP_CLRAM: an_mant = 72'd0;
       rd68884_ucode_pkg::MOP_MULSTEP: begin
         cn = mul_acc;
         stkn = stk | (c[15:0] != 16'd0);
@@ -973,25 +957,16 @@ module rd68884_seq (
       rd68884_ucode_pkg::MOP_MUL10,
       rd68884_ucode_pkg::MOP_ADDDIG: an_mant = add_s[71:0];
       rd68884_ucode_pkg::MOP_QINC:   cn = {c[87:7], c[6:0] + 7'd1};
-      rd68884_ucode_pkg::MOP_MULHI:  an_mant = {c[63:0], 8'd0};
-      rd68884_ucode_pkg::MOP_MULFIN: begin
-        if (c[79]) begin
-          an_mant = c[79:8];  an_exp = a_exp + 18'd1;  stkn = stk | (c[7:0] != 8'd0);
-        end else begin
-          an_mant = c[78:7];  stkn = stk | (c[6:0] != 7'd0);
-        end
+      rd68884_ucode_pkg::MOP_MULFIN: begin              // a NORM follows (doc/microcode.md)
+        an_mant = c[79:8];  an_exp = a_exp + 18'd1;  stkn = stk | (c[7:0] != 8'd0);
       end
       rd68884_ucode_pkg::MOP_DIVSTEP: begin
         cn = {8'd0, c[78:0], div_q};
         an_mant = {div_rr[70:0], 1'b0};
         rxn = div_rr[74:71];
       end
-      rd68884_ucode_pkg::MOP_DIVFIN: begin
-        if (c[73]) begin
-          an_mant = c[73:2];  stkn = stk | (c[1:0] != 2'd0) | r_nz;
-        end else begin
-          an_mant = c[72:1];  an_exp = a_exp - 18'd1;  stkn = stk | c[0] | r_nz;
-        end
+      rd68884_ucode_pkg::MOP_DIVFIN: begin              // a NORM follows
+        an_mant = c[73:2];  stkn = stk | (c[1:0] != 2'd0) | r_nz;
         rxn = 4'd0;
       end
       rd68884_ucode_pkg::MOP_SQSTEP: begin
@@ -1013,9 +988,6 @@ module rd68884_seq (
       rd68884_ucode_pkg::MOP_QUIET: an_mant = a_mant | {2'b01, 70'd0};
       rd68884_ucode_pkg::MOP_INFA: begin
         an_exp = EXP_SPECIAL;  an_mant = 72'd0;
-      end
-      rd68884_ucode_pkg::MOP_MAXA: begin
-        an_exp = emax;  an_mant = ~lowmask;
       end
       rd68884_ucode_pkg::MOP_ZEROM: begin
         an_exp = EXP_ZERO;  an_mant = 72'd0;

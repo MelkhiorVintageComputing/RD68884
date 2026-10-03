@@ -197,28 +197,6 @@ def place_int(v, bits):
     return (v & ((1 << bits) - 1)) << (32 - bits)
 
 
-def b_lt_a(a, b):
-    """FCMP (FPU 4.6): the destination B below the source A, both normalised
-    (an infinity has the special exponent and a larger magnitude than any
-    finite value; zeros are equal whatever their sign)."""
-    if a.zero and b.zero:
-        return False
-    if a.sign != b.sign:
-        return bool(b.sign)
-    if b.zero:
-        return not a.sign
-    if a.zero:
-        return bool(a.sign)
-    mb, ma = (b.exp, b.mant), (a.exp, a.mant)
-    return (mb < ma) if not a.sign else (mb > ma)
-
-
-def b_eq_a(a, b):
-    if a.zero and b.zero:
-        return True
-    return (a.sign, a.exp, a.mant) == (b.sign, b.exp, b.mant)
-
-
 FP_NAN = FP(0, EXP_SPECIAL, ((1 << 64) - 1) << 8)
 FP_ZERO = FP(0, EXP_ZERO, 0)
 
@@ -351,7 +329,7 @@ class Core:
                 'AE_GE_IMM': a.exp >= sext16(imm), 'AE_ODD': a.exp & 1,
                 'RINEX': self.rinex, 'RX0': self.rx & 1,
                 'OVF_INF': {RN: 1, RZ: 0, RM: a.sign, RP: 1 - a.sign}[self.rmr],
-                'B_LT_A': b_lt_a(a, bb), 'B_EQ_A': b_eq_a(a, bb),
+                'AE_EQ_B': a.exp == bb.exp, 'RX1': self.rx >> 1 & 1,
                 'TRAP': trap_vector(exc, en) is not None,
                 'SUPPRESS': (exc & en & 0x64) != 0, 'PREC_X': self.psr == P_X,
                 'SIGN_XOR': a.sign != bb.sign, 'RM_MODE': self.rmr == RM,
@@ -455,7 +433,8 @@ class Core:
         rfop = F('RF')
         if rfop == 'CROM':
             off = {'IMM': 0, 'CMD': cmd & 0x7F, 'ELO': a.exp & 0x3F,
-                   'EHI': (a.exp >> 6) & 0x7F, 'EXP': a.exp & 0x3FF}[F('RFA')]
+                   'EHI': (a.exp >> 6) & 0x7F, 'EXP': a.exp & 0x3FF,
+                   'PSR': self.psr}[F('RFA')]
             stk, sign, e, m = self.crom[(imm + off) & 0x7FF]
             n_rfq, n_qstk = FP(sign, e, m), stk
         elif rfop != 'NONE':
@@ -586,14 +565,11 @@ class Core:
                 e += 1
             n_a.mant, n_a.exp = (q << pos) & M72, e
             n_rinex, n_stk = int(bool(inexact)), 0
-        elif mop == 'TRUNCA':
-            n_a.mant = a.mant & ~((1 << lsb) - 1) & M72
-        elif mop == 'TRUNCB':
-            n_b.mant = bb.mant & ~((1 << lsb) - 1) & M72
+        elif mop == 'CMPM':
+            # The mantissas compared, through the adder: RX[0] A < B, RX[1] A = B.
+            n_rx = (int(a.mant == bb.mant) << 1) | int(a.mant < bb.mant)
         elif mop == 'CLRQ':
             n_c, n_rx, n_stk = 0, 0, 0
-        elif mop == 'CLRAM':
-            n_a.mant = 0
         elif mop == 'MULSTEP':
             k = bb.mant & 0xFFFF
             n_c = ((self.c >> 16) + a.mant * k) & M88
@@ -602,13 +578,11 @@ class Core:
             # B[71:8] is the low 64 bits of the product (doc/microcode.md).
             n_b.mant = ((self.c & 0xFFFF) << 56) | (bb.mant >> 16)
         elif mop == 'MULFIN':
+            # The product's top 72 bits; a NORM follows when C[79] is clear
+            # (the bit it drops into STK is below any rounding's guard bit).
             c = self.c
-            if c >> 79 & 1:
-                n_a.mant, n_a.exp = (c >> 8) & M72, a.exp + 1
-                n_stk = self.stk | int(c & 0xFF != 0)
-            else:
-                n_a.mant = (c >> 7) & M72
-                n_stk = self.stk | int(c & 0x7F != 0)
+            n_a.mant, n_a.exp = (c >> 8) & M72, a.exp + 1
+            n_stk = self.stk | int(c & 0xFF != 0)
         elif mop == 'DIVSTEP':
             r = (self.rx << 72) | a.mant
             q = int(r >= bb.mant)
@@ -620,12 +594,8 @@ class Core:
         elif mop == 'DIVFIN':
             r = (self.rx << 72) | a.mant
             c = self.c
-            if c >> 73 & 1:
-                n_a.mant = (c >> 2) & M72
-                n_stk = self.stk | int(c & 3 != 0 or r != 0)
-            else:
-                n_a.mant, n_a.exp = (c >> 1) & M72, a.exp - 1
-                n_stk = self.stk | int(c & 1 != 0 or r != 0)
+            n_a.mant = (c >> 2) & M72                # a NORM follows, as MULFIN's
+            n_stk = self.stk | int(c & 3 != 0 or r != 0)
             n_rx = 0
         elif mop == 'SQSTEP':
             r = (self.rx << 72) | a.mant
@@ -653,16 +623,12 @@ class Core:
             n_a.mant = a.mant | (1 << 70)
         elif mop == 'INFA':
             n_a.exp, n_a.mant = EXP_SPECIAL, 0
-        elif mop == 'MAXA':
-            n_a.exp, n_a.mant = emax, M72 & ~((1 << lsb) - 1)
         elif mop == 'ZEROM':
             n_a.exp, n_a.mant = EXP_ZERO, 0
         elif mop == 'MUL10':
             n_a.mant = (a.mant * 10) & M72
         elif mop == 'ADDDIG':
             n_a.mant = (a.mant + (xi[0] & 0xF)) & M72
-        elif mop == 'MULHI':
-            n_a.mant = (self.c & ((1 << 64) - 1)) << 8
         elif mop == 'QINC':
             n_c = (self.c & ~0x7F) | ((self.c + 1) & 0x7F)
 

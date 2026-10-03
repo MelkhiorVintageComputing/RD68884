@@ -128,6 +128,11 @@ def trans_table():
 
         ln2, ln10 = mpmath.ln(2), mpmath.ln(10)
         put('ONE', 1)
+        # The largest number of each precision, by PSR (X, S, D, SGLX):
+        # FPU 6.1.4's result of an untrapped overflow toward zero.
+        for name, bits, emax in (('MAXX', 64, 16383), ('MAXS', 24, 127), ('MAXD', 53, 1023),
+                                 ('MAXG', 24, 16383)):
+            out.append((name, (0, 0, emax, ((1 << bits) - 1) << (72 - bits))))
         put('TWO', 2)
         put('C64_LN2', 64 / ln2)
         split('LN2_64', ln2 / 64, 48)

@@ -20,6 +20,7 @@ the sticky bit below A's mantissa; every instruction clears it first.
 import crom
 import packed_ucode
 import trans_ucode
+from arith_ucode_cmp import mag_cmp
 
 # Register-file temporaries (entries 16 and up, doc/microcode.md).
 T_X, T_Y, T_ILOG, T_LEN, T_S, T_HI, T_Q = 16, 17, 18, 19, 20, 21, 22
@@ -227,7 +228,9 @@ def emit(p):
     L('p_over')
     u(EXCSET=OVFL | INEX2, SEQ='CALL', TGT='et_ovf')
     u(SEQ='BR', COND='OVF_INF', TGT='p_inf')
-    u(MOP='MAXA', SEQ='RET', comment='the largest number (FPU 6.1.4)')
+    u(RF='CROM', RFA='PSR', IMM=crom.addr('MAXX'), comment='the largest number (FPU 6.1.4)')
+    u(ASRC='RFQ')
+    u(SGN='XOR', SEQ='RET', comment='B, the intermediate, has the sign')
     L('p_inf')
     u(MOP='INFA', SEQ='RET')
 
@@ -266,7 +269,9 @@ def emit(p):
     u(SEQ='BR', NEG=1, COND='AE_GT_EMAX', TGT='pm_ret')
     u(EXCSET=OVFL | INEX2, SEQ='CALL', TGT='et_mem')
     u(SEQ='BR', COND='OVF_INF', TGT='pm_inf')
-    u(MOP='MAXA', SEQ='RET')
+    u(RF='CROM', RFA='PSR', IMM=crom.addr('MAXX'))
+    u(ASRC='RFQ')
+    u(SGN='XOR', SEQ='RET')
     L('pm_inf')
     u(MOP='INFA')
     L('pm_ret')
@@ -312,8 +317,8 @@ def emit(p):
     L('sq_odd')
     u(EOP='ADDI', IMM=0xFFFF, comment='odd exponent: radicand in [2,4)')
     L('sq_go')
-    u(EOP='HALF', MOP='CLRQ', CTR='LOAD', IMM=71)
-    u(MOP='CLRAM')
+    u(MOP='CLRQ', CTR='LOAD', IMM=71)
+    u(MOP='ZEROM', EOP='HALF', comment='A = 0, its exponent halved')
     L('sq_loop')
     u(SEQ='LOOP', TGT='sq_loop', MOP='SQSTEP')
     u(MOP='SQFIN', SEQ='CALL', TGT='post')
@@ -435,25 +440,38 @@ def emit(p):
     # The cores, for any finite non-zero normalised operands, the sticky bit
     # in STK: mulc A = A x B, 72 x 16 a clock, five clocks; divc A = A / B,
     # one quotient bit a clock (doc/microcode.md).
+    # trunc2: A and B, finite and non-zero, truncated to 24 significant bits
+    # (FPU 4.5.5.2): shifted down, the low bits dropped, and back.
+    L('trunc2')
+    u(SEQ='CALL', TGT='trunc1')
+    u(ASRC='B', BSRC='A')
+    u(SEQ='CALL', TGT='trunc1')
+    u(ASRC='B', BSRC='A', SEQ='RET')
+    L('trunc1')
+    u(EOP='SA_IMM', IMM=48)
+    u(MOP='SHRA')
+    u(MOP='NORM', FLAG='CLR_STK')
+    u(EOP='ADDI', IMM=48, SEQ='RET')
+
     L('mulc')
     u(SGN='XOR', EOP='ADDB', MOP='CLRQ')
     for _ in range(5):
         u(MOP='MULSTEP')
-    u(MOP='MULFIN', SEQ='RET')
+    u(MOP='MULFIN')
+    u(MOP='NORM', SEQ='RET')
     L('divc')
     u(EOP='SUBB', MOP='CLRQ', CTR='LOAD', IMM=73)
     L('div_loop')
     u(SEQ='LOOP', TGT='div_loop', MOP='DIVSTEP')
-    u(MOP='DIVFIN', SEQ='RET')
+    u(MOP='DIVFIN')
+    u(MOP='NORM', SEQ='RET')
 
     # FMUL and FSGLMUL.
     L('op_fsglmul')
     u(SEQ='CALL', TGT='load_dst')
     u(SEQ='BR', COND='A_NAN', TGT='nan2')
     u(SEQ='BR', COND='B_NAN', TGT='nan2')
-    u(PSR='SGLX', comment='FPU 4.5.5.2: single mantissa, extended range')
-    u(MOP='TRUNCA', comment='the operands truncated to single')
-    u(MOP='TRUNCB', SEQ='JUMP', TGT='mul_go')
+    u(PSR='SGLX', SEQ='JUMP', TGT='mul_go', comment='FPU 4.5.5.2: single mantissa, extended range')
     L('op_fmul')
     u(SEQ='CALL', TGT='load_dst')
     u(SEQ='BR', COND='A_NAN', TGT='nan2')
@@ -463,6 +481,9 @@ def emit(p):
     u(SEQ='BR', COND='B_INF', TGT='mul_binf')
     u(SEQ='BR', COND='A_ZERO', TGT='mul_zero')
     u(SEQ='BR', COND='B_ZERO', TGT='mul_zero')
+    u(SEQ='BR', COND='PREC_SGLX', NEG=1, TGT='mul_go2')
+    u(SEQ='CALL', TGT='trunc2', comment='FSGLMUL: the operands truncated to single')
+    L('mul_go2')
     u(SEQ='CALL', TGT='mulc')
     u(SEQ='CALL', TGT='post')
     u(SEQ='JUMP', TGT='finish')
@@ -480,9 +501,7 @@ def emit(p):
     u(SEQ='CALL', TGT='load_dst')
     u(SEQ='BR', COND='A_NAN', TGT='nan2')
     u(SEQ='BR', COND='B_NAN', TGT='nan2')
-    u(PSR='SGLX')
-    u(MOP='TRUNCA')
-    u(MOP='TRUNCB', SEQ='JUMP', TGT='div_go')
+    u(PSR='SGLX', SEQ='JUMP', TGT='div_go')
     L('op_fdiv')
     u(SEQ='CALL', TGT='load_dst')
     u(SEQ='BR', COND='A_NAN', TGT='nan2')
@@ -492,6 +511,9 @@ def emit(p):
     u(SEQ='BR', COND='A_INF', TGT='div_ainf')
     u(SEQ='BR', COND='B_INF', TGT='div_inf')
     u(SEQ='BR', COND='B_ZERO', TGT='div_zero')
+    u(SEQ='BR', COND='PREC_SGLX', NEG=1, TGT='div_go2')
+    u(SEQ='CALL', TGT='trunc2', comment='FSGLDIV: the operands truncated to single')
+    L('div_go2')
     u(ASRC='B', BSRC='A', SGN='XOR', comment='A = dividend (FPn), B = divisor')
     u(SEQ='CALL', TGT='divc')
     u(SEQ='CALL', TGT='post')
@@ -575,9 +597,8 @@ def emit(p):
             # Round the quotient to nearest: if 2r > y, or 2r = y with the
             # quotient odd, the remainder is r - y and the quotient one more.
             u(EOP='ADDI', IMM=1, comment='2r')
-            u(SEQ='BR', COND='B_LT_A', TGT='rem_adj')
-            u(SEQ='BR', NEG=1, COND='B_EQ_A', TGT='rem_noadj')
-            u(SEQ='BR', COND='Q_ODD', TGT='rem_adj')
+            mag_cmp(p, 'rem_adj', 'rem_noadj')
+            u(SEQ='BR', COND='Q_ODD', TGT='rem_adj', comment='a tie: to even')
             L('rem_noadj')
             u(EOP='ADDI', IMM=0xFFFF, SEQ='JUMP', TGT='rem_out')
             L('rem_adj')
@@ -603,11 +624,29 @@ def emit(p):
 
     # FCMP (FPU 4.6): only the condition codes, from the operation table.
     L('op_fcmp')
-    u(SEQ='CALL', TGT='load_dst')
+    u(SEQ='CALL', TGT='load_dst', comment='A = source, B = FPn')
     u(SEQ='BR', COND='A_NAN', TGT='cmp_nan')
     u(SEQ='BR', COND='B_NAN', TGT='cmp_nan')
-    u(SEQ='BR', COND='B_EQ_A', TGT='cmp_eq')
-    u(SEQ='BR', COND='B_LT_A', TGT='cmp_lt')
+    u(SEQ='BR', COND='A_ZERO', TGT='cmp_az')
+    u(SEQ='BR', COND='B_ZERO', TGT='cmp_bz')
+    u(SEQ='BR', COND='SIGN_XOR', TGT='cmp_sd')
+    # The same sign: the magnitudes decide, the other way round when negative.
+    mag_cmp(p, 'cmp_sgt', 'cmp_slt', 'cmp_eq')
+    L('cmp_sgt')                                  # |source| > |FPn|
+    u(SEQ='BR', COND='B_SIGN', TGT='cmp_gt')
+    u(SEQ='JUMP', TGT='cmp_lt')
+    L('cmp_slt')                                  # |source| < |FPn|
+    u(SEQ='BR', COND='B_SIGN', TGT='cmp_lt')
+    u(SEQ='JUMP', TGT='cmp_gt')
+    L('cmp_az')                                   # source zero
+    u(SEQ='BR', COND='B_ZERO', TGT='cmp_eq')
+    L('cmp_sd')                                   # or the signs differ: FPn's sign
+    u(SEQ='BR', COND='B_SIGN', TGT='cmp_lt')
+    u(SEQ='JUMP', TGT='cmp_gt')
+    L('cmp_bz')                                   # FPn zero: the source's sign
+    u(SEQ='BR', COND='A_SIGN', TGT='cmp_gt')
+    u(SEQ='JUMP', TGT='cmp_lt')
+    L('cmp_gt')
     u(FPSR='CCIMM', IMM=0, SEQ='JUMP', TGT='fin_x')
     L('cmp_eq')
     u(SEQ='BR', COND='B_SIGN', TGT='cmp_eqn')

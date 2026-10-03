@@ -22,6 +22,7 @@ tools/iss/tests/test_arith.py holds the two to the bound, not to the bit.
 """
 
 import crom
+from arith_ucode_cmp import mag_cmp
 
 T_X, T_Y, T_ILOG, T_LEN, T_S, T_HI, T_Q = 16, 17, 18, 19, 20, 21, 22
 INEX1, INEX2, OPERR, SNAN = 0x01, 0x02, 0x20, 0x40
@@ -149,8 +150,8 @@ def emit(p):
     u(SEQ='CALL', TGT='scale10')
     u(RF='WRITE', RFA='IMM', IMM=T_Q, SGN='ABS', comment='Y; A = |Y|')
     u(SEQ='CALL', TGT='po_vs_len')
-    u(SEQ='BR', COND='B_LT_A', TGT='po_low', comment='|Y| >= 10^len: ilog was low')
-    u(SEQ='BR', COND='B_EQ_A', TGT='po_low')
+    mag_cmp(p, 'po_low', 'po_y_ok', 'po_low')     # |Y| >= 10^len: ilog was low
+    L('po_y_ok')
     # Round Y to an integer, in the mode, with its sign.
     u(RF='READ', RFA='IMM', IMM=T_Q)
     u(ASRC='RFQ')
@@ -164,8 +165,8 @@ def emit(p):
     u(MOP='NORM')
     u(RF='WRITE', RFA='IMM', IMM=T_Q, SGN='ABS', comment='q; A = |q|')
     u(SEQ='CALL', TGT='po_vs_len')
-    u(SEQ='BR', COND='B_LT_A', TGT='po_carry', comment='q = 10^len: a carry')
-    u(SEQ='BR', COND='B_EQ_A', TGT='po_carry')
+    mag_cmp(p, 'po_carry', 'po_q_ok', 'po_carry')  # q = 10^len: a carry
+    L('po_q_ok')
     # The digits: |q| x 10^(17 - len), seventeen of them, by division.
     u(RF='READ', RFA='IMM', IMM=T_ILOG)
     u(ASRC='RFQ')

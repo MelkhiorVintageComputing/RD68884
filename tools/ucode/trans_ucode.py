@@ -19,6 +19,7 @@ as tools/model/transcend.py reads them.
 """
 
 import crom
+from arith_ucode_cmp import mag_cmp
 
 C = crom.addr
 # Register-file temporaries for the transcendentals (doc/microcode.md).
@@ -300,7 +301,8 @@ def emit(p):
             st('X2')
             call('rintn')
             ldb('X2')
-            u(SEQ='BR', NEG=1, COND='B_EQ_A', TGT=f'{op}_g')
+            u(SEQ='BR', COND='A_ZERO', TGT=f'{op}_g')
+            mag_cmp(p, f'{op}_g', f'{op}_g')            # an integer: n = x
             toexp()
             u(BSRC='A')
             ldc('ONE')
@@ -316,7 +318,8 @@ def emit(p):
             st('X2')
             call('rintn')
             ldb('X2')
-            u(SEQ='BR', NEG=1, COND='B_EQ_A', TGT=f'{op}_g')
+            u(SEQ='BR', COND='A_ZERO', TGT=f'{op}_g')
+            mag_cmp(p, f'{op}_g', f'{op}_g')            # an integer: n = x
             toexp()
             u(RF='CROM', RFA='ELO', IMM=crom.CR_P10)
             u(ASRC='RFQ', FLAG='CLR_STK', SEQ='CALL', TGT='post')
@@ -589,7 +592,7 @@ def emit(p):
     u(RF='CROM', RFA='ELO', IMM=crom.CR_P10)
     u(BSRC='RFQ')
     ld('X')
-    u(SEQ='BR', NEG=1, COND='B_EQ_A', TGT='log10_n')
+    mag_cmp(p, 'log10_n', 'log10_n')                 # x = 10^n
     ld('T1')
     u(FLAG='CLR_STK', SEQ='BR', COND='A_ZERO', TGT='log_out')
     u(SEQ='CALL', TGT='post')
@@ -624,19 +627,23 @@ def emit(p):
     u(SEQ='BR', NEG=1, COND='AE_GE_IMM', IMM=0, TGT='atanh_1')
     u(SEQ='BR', COND='A_POW2', TGT='t_dzsinf', comment='+-1')
     u(SEQ='JUMP', TGT='operr')
+    # On |x|, so that z = 2|x| / (1 - |x|) > 0 and 1 + z cannot cancel
+    # (FPSP's arrangement); the sign is x's.
     L('atanh_1')
     st('X2')
+    u(SGN='ABS')
+    st('A1')
     ldc('ONE')
-    ldb('X2')
+    ldb('A1')
     sub()
-    st('T1')                                            # 1 - x
-    ld('X2')
+    st('T1')                                            # 1 - |x|
+    ld('A1')
     u(EOP='ADDI', IMM=1)
     ldb('T1')
     div()
     call('lnp1')
     u(EOP='ADDI', IMM=-1 & 0xFFFF)
-    u(SEQ='JUMP', TGT='log_out')
+    result('X2')
 
     # =========================================================================
     # Arctangents. atan01 for 0 <= y <= 1: c = round(16 y) / 16,
@@ -811,7 +818,7 @@ def emit(p):
     # Payne and Hanek: x = M 2^E, M a 64-bit integer. Of x 2/pi mod 4 only
     # four 64-bit chunks of 2/pi matter, from chunk idx = (E + 62) >> 6;
     # t = ((E + 62) & 63) - 62 places them. Each product M G is exact,
-    # its high half from C (MULHI), its low from B (MULSTEP shifts it there).
+    # its high half from C (SQFIN), its low from B (MULSTEP shifts it there).
     L('red_ph')
     st('X')
     u(EOP='SA_IMM', IMM=8)
@@ -837,7 +844,7 @@ def emit(p):
         u(MOP='CLRQ')
         for _ in range(5):
             u(MOP='MULSTEP')
-        u(MOP='MULHI')
+        u(MOP='SQFIN')                                   # A = C[71:0]: the high half
         st(f'H{k}')
         u(ASRC='B')
         st(f'L{k}')
@@ -848,7 +855,7 @@ def emit(p):
         u(MOP='NORM')
         st('T1')
         ld(f'H{i + 1}')
-        u(EOP='LDI', IMM=63)
+        u(EOP='LDI', IMM=71)                             # at mantissa bits 63-0
         u(MOP='NORM')
         ldb('T1')
         add()
@@ -1030,8 +1037,8 @@ def emit(p):
     L('sqz_odd')
     u(EOP='ADDI', IMM=0xFFFF)
     L('sqz_go')
-    u(EOP='HALF', MOP='CLRQ', CTR='LOAD', IMM=71)
-    u(MOP='CLRAM')
+    u(MOP='CLRQ', CTR='LOAD', IMM=71)
+    u(MOP='ZEROM', EOP='HALF')
     L('sqz_loop')
     u(SEQ='LOOP', TGT='sqz_loop', MOP='SQSTEP')
     u(MOP='SQFIN', SEQ='RET')

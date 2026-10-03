@@ -311,6 +311,20 @@ def packed_close(c, sm, si):
         return False
     diff = [k for k in sm if sm[k] != si[k]]
     if opclass == 2:
+        if diff == ['regs', 'mem'] or diff == ['mem']:
+            # ETEMP (an over/underflow in a single or double result), the
+            # same conversion rounded: its bytes are the frame's $08-$13.
+            frame = 0x8000 - 28
+            if any(sm['mem'].get(q) != si['mem'].get(q) for q in set(sm['mem']) | set(si['mem'])
+                   if not frame + 8 <= q < frame + 20):
+                return False
+            ea = int.from_bytes(bytes(sm['mem'][frame + 8 + i] for i in range(12)), 'big')
+            eb = int.from_bytes(bytes(si['mem'][frame + 8 + i] for i in range(12)), 'big')
+            if abs((ea & ((1 << 64) - 1)) - (eb & ((1 << 64) - 1))) > 1 or ea >> 64 != eb >> 64:
+                return False
+            diff = [k for k in diff if k != 'mem']
+            if not diff:
+                return True
         if diff != ['regs']:
             return False
         ry = (c['cmd'] >> 7) & 7

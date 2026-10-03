@@ -121,16 +121,15 @@ The constant ROM is `tools/ucode/crom.py`, generated into `rtl/gen/rd68884_crom.
 | `NORM` | `A` left until its bit 71 is set, the exponent down by as much; nothing if `A` is zero |
 | `RSH1` | If `RX` holds a carry: `A` right by one with the carry in, the exponent up |
 | `ROUND`, `ROUNDX` | Round `A` at the precision's LSB (bit 8, 19 or 48), or at extended's, in `RMR`'s mode; a carry out renormalises; `RINEX` says whether it was inexact |
-| `TRUNCA`, `TRUNCB` | Clear the bits below the precision's LSB (FSGLMUL/FSGLDIV inputs) |
+| `CMPM` | `A`'s mantissa against `B`'s, through the adder: `RX[0]` = less, `RX[1]` = equal. With `AE_LT_B` and `AE_EQ_B` it compares magnitudes (`tools/ucode/arith_ucode_cmp.py`) |
 | `MULSTEP` | `C = C/2¹⁶ + A × B[15:0]`, then `B` right by 16 with the 16 bits `C` drops entering at its top. Five steps make the 72 × 72 product: `C` keeps its top 80 bits, and `B[71:8]` its low 64 |
-| `MULHI` | `A = C[63:0]` at mantissa bits 71–8: the high half of an exact 64 × 64 product |
-| `MULFIN` | The product's top 72 bits into `A`, the rest into `STK` |
+| `MULFIN` | The product's top 72 bits into `A`, its exponent up by one, the rest into `STK`. A `NORM` follows: when the top bit is clear, the bit it moves into `STK` lies below any rounding's guard bit |
 | `DIVSTEP` | One restoring-division step: trial-subtract `B` from `{RX, A}`, the quotient bit into `C` |
-| `DIVFIN` | 72 quotient bits into `A`; the rest and a non-zero remainder into `STK` |
+| `DIVFIN` | 72 quotient bits into `A`; the rest and a non-zero remainder into `STK`; a `NORM` follows, as for `MULFIN` |
 | `SQSTEP` | One bit of the square root: the radicand's next two bits from `B`, trial-subtract `4·root + 1` |
 | `SQFIN` | The root into `A`; a non-zero remainder into `STK` |
 | `EXPF` | `A` becomes its own exponent as a value (FGETEXP) |
-| `QUIET`, `INFA`, `MAXA`, `ZEROM` | A quiet NaN, an infinity, the largest number of the precision, a zero |
+| `QUIET`, `INFA`, `ZEROM` | A quiet NaN, an infinity, a zero |
 | `MUL10`, `ADDDIG` | `A = 10·A`; `A = A +` the digit at `XI0[3:0]` (packed in) |
 | `QINC` | `C[6:0] + 1`: the quotient of an FREM rounded up |
 
@@ -156,6 +155,8 @@ The constant ROM is `tools/ucode/crom.py`, generated into `rtl/gen/rd68884_crom.
 | `RMR` | `RN`, `RM` | Round to nearest, or down, for the microcode's own integer roundings |
 | `COND` | `A_POW2` | `A`'s mantissa is exactly 1 |
 | `RFA` | `FPC` | The register file at the command word's bits 2–0 (FSINCOS's cosine) |
+| | `PSR` | For the constant ROM: the offset is `PSR`. The largest number of each precision, FPU 6.1.4's untrapped overflow toward zero, is read this way |
+| `COND` | `AE_EQ_B`, `RX1` | The exponents equal; `CMPM`'s equality |
 
 The `LOG10` constant is accurate to about 2⁻³² relative. That is exact for every exponent of the range: |E| < 2¹⁵, and E·log₁₀2 never comes within 3·10⁻⁵ of an integer there (the convergent 4004/13301 is the closest).
 
@@ -171,7 +172,7 @@ The `LOG10` constant is accurate to about 2⁻³² relative. That is exact for e
   3. Then overflow is checked.
 
   The intermediate is kept in `B`. The exceptional operand (ETEMP) is made from it: it is rounded to extended and its exponent wraps by ±$6000, or becomes $0000 when the result is catastrophic (FPU 6.1.4 and 6.1.5). FMOVE out to S or D uses the format's range, and ETEMP is the intermediate rounded to the format.
-- **FSGLMUL/FSGLDIV:** a tiny result has 24 significant bits, but none finer than the extended quantum (doc/model.md). Up to a 40-bit denormalisation the microcode rounds first and then shifts, which is exact; beyond that, it shifts and then rounds at extended.
+- **FSGLMUL/FSGLDIV:** the operands are truncated to 24 bits by `trunc2`: shifted down by 48, the dropped bits discarded, and normalised back. A tiny result has 24 significant bits, but none finer than the extended quantum (doc/model.md). Up to a 40-bit denormalisation the microcode rounds first and then shifts, which is exact; beyond that, it shifts and then rounds at extended.
 - **FINT/FINTRZ:** shifted so that the integer part ends at the extended LSB, rounded there with `ROUNDX`, shifted back, and rounded to the precision like any result.
 - **FMOVE out to an integer:** the same rounding at the integer's LSB. Beyond the format's range, OPERR and the saturated value (FPU 6.1.3).
 - **FMOVECR:** the constant from the ROM, with its sticky bit, rounded by `post` like any result.
@@ -226,7 +227,7 @@ Internal arithmetic is done by subroutines that allow zeros: `mulz`, `addz`, `di
 - **Below 2²⁰:** Cody and Waite, with π/2 in three parts. N·P1 and N·P2 are exact for N < 2²⁰.
 - **From 2²⁰ up:** Payne and Hanek.
   1. x = M·2^E. Only four 64-bit chunks of 2/π matter to x·2/π mod 4, from chunk idx = (E + 62) >> 6, and t = ((E + 62) & 63) − 62 places them.
-  2. Each M·G is exact: `MULHI` gives its high half and `B` its low half.
+  2. Each M·G is exact: `SQFIN` takes its high half from `C`, and `B` holds its low half.
   3. The words V_i = (L_i + H_(i+1))·2^(t − 64i) are exact sums. With V0 = K + F0, the quadrant is round(K mod 4 + F0 + V1).
   4. r = (((K mod 4) − n) + F0 + V1 + V2)·π/2, the small terms added last so that their error is relative to r.
 

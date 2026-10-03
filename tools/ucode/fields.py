@@ -40,7 +40,7 @@ FIELDS = [
               'A_ZERO', 'A_INF', 'A_NAN', 'A_SNAN', 'A_SIGN', 'B_ZERO', 'B_INF',
               'B_NAN', 'B_SNAN', 'B_SIGN', 'A_J', 'AE_LT_EMIN', 'AE_GT_EMAX',
               'AE_LT_XMIN', 'AE_LT_B', 'AE_GE_IMM', 'AE_ODD', 'RINEX', 'RX0',
-              'OVF_INF', 'INT_OVF', 'B_LT_A', 'B_EQ_A', 'TRAP', 'SUPPRESS',
+              'OVF_INF', 'INT_OVF', 'AE_EQ_B', 'RX1', 'TRAP', 'SUPPRESS',
               'PREC_X', 'SIGN_XOR', 'RM_MODE', 'PREC_SGLX',
               # M6: packed decimal (XI holds the image), the k-factor in
               # MASK[6:0], the quotient's parity in C[0]
@@ -83,7 +83,9 @@ FIELDS = [
     # bit (0 on a READ).
     ('RF', ['NONE', 'READ', 'WRITE', 'CROM']),
     # FPC: the command word's bits 2-0 (FSINCOS's cosine register).
-    ('RFA', ['IMM', 'RX', 'RY', 'RN', 'ETEMP', 'CTR', 'CMD', 'ELO', 'EHI', 'EXP', 'FPC']),
+    # PSR (CROM): the offset is the precision register.
+    ('RFA', ['IMM', 'RX', 'RY', 'RN', 'ETEMP', 'CTR', 'CMD', 'ELO', 'EHI', 'EXP', 'FPC',
+             'PSR']),
     # A <= RFQ, unpack(XI) in a format, the default NaN, zero, or B (with
     # the sticky bit from its saved copy: B's save and A's restore).
     ('ASRC', ['NONE', 'RFQ', 'UNPACKX', 'NAN', 'ZERO', 'B', 'UNPACKS',
@@ -112,10 +114,9 @@ FIELDS = [
     # ---- the arithmetic ---------------------------------------------------------
     # Mantissa operations, one per clock (doc/microcode.md has each one).
     ('MOP', ['NONE', 'ADD', 'SUB', 'NEG', 'SHRA', 'SHRB', 'NORM', 'RSH1',
-             'ROUND', 'ROUNDX', 'TRUNCA', 'TRUNCB', 'CLRQ', 'CLRAM',
+             'ROUND', 'ROUNDX', 'CLRQ', 'CMPM',
              'MULSTEP', 'MULFIN', 'DIVSTEP', 'DIVFIN', 'SQSTEP', 'SQFIN',
-             'EXPF', 'QUIET', 'INFA', 'MAXA', 'ZEROM', 'MUL10', 'ADDDIG',
-             'QINC', 'MULHI']),
+             'EXPF', 'QUIET', 'INFA', 'ZEROM', 'MUL10', 'ADDDIG', 'QINC']),
     # Exponent and shift-amount operations.
     ('EOP', ['NONE', 'ADDB', 'SUBB', 'ADDI', 'LDI', 'SA_AB', 'SA_IA', 'SA_IMM',
              'SA_EMIN', 'LDEMIN', 'HALF', 'LDB', 'ADDBI', 'NEGE', 'EXP10', 'LOG10',

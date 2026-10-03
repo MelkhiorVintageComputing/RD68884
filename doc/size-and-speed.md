@@ -18,6 +18,8 @@ Size is the project's first goal (CLAUDE.md), so every milestone records what it
 | M6 | impl | 4744 | 906 | 6 | 11 | 58.1 MHz (17.23 ns) | `make impl`; limited by microword → `A`'s exponent, 31 levels |
 | M7 transcendentals | synth | 5171 | 911 | 6 | 20 | WNS +4.76 ns at 20 ns | +408 LUTs: MULSTEP's capture into B, MULHI, LDM, A_POW2, the 12-bit micro-address, the 2K constant ROM's address. Block RAM: the microcode store is 2744 words of 122 bits, the constant ROM 2K × 92 |
 | M7 | impl | 5341 | 911 | 6 | 20 | 53.7 MHz (18.63 ns) | `make impl`; still above the 50 MHz the core needs, with less margin; limited by microword → `A`'s exponent, 31 levels |
+| M7 size pass | synth | 4380 | 911 | 6 | 20 | WNS +5.31 ns at 20 ns | −791 LUTs, see below |
+| M7 size pass | impl | 4363 | 911 | 6 | 20 | 54.5 MHz (18.35 ns) | limited by microword → `A`'s exponent, 34 levels |
 
 M5 notes:
 - The utilisation-by-hierarchy report puts most of these LUTs in `u_rom`. Vivado has optimised across the ROM's boundary, so its outputs are decoded control rather than the 116 stored bits: the instance has 613 output pins and no flip-flops of its own besides the 3 RAMB36. Only the total is meaningful.
@@ -28,3 +30,41 @@ M5 notes:
 - The microcode store is 944 words of 116 bits: 3 RAMB36 at 1K × 36, and the remaining bits in logic. The register file is 1 RAMB36 + 1 RAMB18.
 
 Budget (doc/architecture.md): about 3.5–4.5K LUTs, 1.3K flip-flops, 3–4 DSP and 10–15 RAMB36 for the complete design, with Fmax of 45–60 MHz.
+
+## The M7 size pass
+
+The method: Vivado synthesis of variants with one group of operations disabled (each `case` label made unreachable), all from the same baseline. The difference is that group's cost. The noise is about ±100 LUTs.
+
+Cost of each group in the 5171-LUT M7 design:
+
+| Group | LUTs |
+|---|--:|
+| DIVSTEP, DIVFIN, SQSTEP, SQFIN | 516 |
+| RSH1, TRUNCA/B, EXPF, QUIET, MAXA, QINC, NEG, CLRAM | 434 |
+| MULSTEP, MULFIN, MULHI | 410 |
+| PACKS, PACKD, PACKI, PACKNI, PACKSAT | 349 |
+| UNPACKS, UNPACKD, UNPACKL/W/B | 122 |
+| The less common exponent operations | 114 |
+| FCMP's 90-bit comparator | 108 |
+| NORM | 67 |
+| ROUND | 57 |
+| SHRA, SHRB | 51 |
+
+**The lesson:** each 72-bit source into `A`'s or `B`'s next state costs tens of LUTs, whatever the operation does. Operations that are cheap but wide therefore moved into microcode:
+- `CLRAM`: `ZEROM` with `HALF` in the same word.
+- `TRUNCA`/`TRUNCB`: shift down, normalise back.
+- `MAXA`: three constants in the ROM, read by `PSR`.
+- `MULFIN`/`DIVFIN`: one alignment each, then `NORM`.
+- `MULHI`: `SQFIN`.
+- The comparator: `CMPM`, through the adder, and `AE_EQ_B`.
+
+The saving was 791 LUTs, and Fmax rose slightly.
+
+**What is left**, re-measured on the new baseline:
+
+| Candidate | LUTs | How |
+|---|--:|---|
+| The divide and square-root steps | about 290 | One shift-then-subtract step for both |
+| The exponent operations, with `LOG10`'s two DSPs | about 230 | One shared exponent adder |
+| The single, double and integer unpackers | about 220 | Microcode, given a raw load and field extraction |
+| The S, D and integer packers | about 160 | The same |
