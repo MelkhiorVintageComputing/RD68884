@@ -9,7 +9,13 @@ the pins, for every port size). Here an access is one call: access() says
 whether it can complete now (an operand access the sequencer is not ready
 for waits, FPU 10.5) and, when it does, applies its effects and raises the
 one-clock events the core sees on the next clock.
+
+A response read that arrives while a just-latched command has been taken by
+the sequencer but not answered waits up to RESP_HOLD clocks for the answer,
+as in the RTL.
 """
+
+RESP_HOLD = 20                 # rtl/rd68884_biu.sv's default
 
 EXP_CMD, EXP_RESP, EXP_OPW, EXP_OPR, EXP_RSEL = range(5)
 CIR_RESPONSE, CIR_CONTROL, CIR_SAVE, CIR_RESTORE = 0x00, 0x02, 0x04, 0x06
@@ -18,13 +24,15 @@ CIR_INSTADDR = 0x18
 
 
 class Biu:
-    def __init__(self):
+    def __init__(self, resp_hold=RESP_HOLD):
+        self.resp_hold = resp_hold
         self.reset()
 
     def reset(self):
         self.resp, self.oneshot, self.expect, self.expect_next = 0x0802, 0, EXP_CMD, EXP_CMD
         self.pv = 0
         self.cmd_pend, self.cmd_cond, self.cmd_word = 0, 0, 0
+        self.fresh, self.held = 0, 0
         self.opw_valid, self.opw_data = 0, 0
         self.opr_valid, self.opr = 0, 0xFFFFFFFF
         self.rsel, self.rsel_dir = 0, 0
@@ -52,6 +60,7 @@ class Biu:
         """The core's writes, at the end of a clock (after its events)."""
         self.ev = {}
         if o['resp_we'] and not (o['resp_cond'] and self.cmd_pend):
+            self.fresh = 0
             self.resp = o['resp']
             self.oneshot = o['resp_oneshot']
             if o['resp_oneshot']:
@@ -77,10 +86,17 @@ class Biu:
         if o['clear']:
             self.pv = 0
             if not self.cmd_pend:
+                self.fresh = 0
                 self.resp, self.oneshot, self.expect = 0x0802, 0, EXP_CMD
 
     # ------------------------------------------------------ an access
     def ready(self, cir, write):
+        """Asked once a clock while an access waits."""
+        if cir == CIR_RESPONSE and not write and not self.pv:
+            if self.fresh and not self.cmd_pend and self.held < self.resp_hold:
+                self.held += 1
+                return False
+            return True
         if cir == CIR_OPERAND and not self._violates(cir, write) and not self.pv:
             return self.opr_valid if not write else not self.opw_valid
         if cir == CIR_RESTORE and not write:
@@ -99,6 +115,7 @@ class Biu:
     def access(self, cir, write, value=0):
         """Complete one access; returns the read value. Call ready() first."""
         ev = {}
+        self.held = 0
         rv = 0xFFFF if cir < 0x10 else 0xFFFFFFFF
         viol = self._violates(cir, write)
         if cir == CIR_RESPONSE and not write:
@@ -112,7 +129,7 @@ class Biu:
         elif cir == CIR_REGSEL and not write:
             rv = self.rsel << 8
         if viol and not self.pv:
-            self.pv, self.resp, self.oneshot = 1, 0x1D0D, 0
+            self.pv, self.resp, self.oneshot, self.fresh = 1, 0x1D0D, 0, 0
         elif not viol and not self.pv:
             if cir == CIR_RESPONSE and not write:
                 ev['resp'] = 1
@@ -124,6 +141,7 @@ class Biu:
             elif cir in (CIR_COMMAND, CIR_CONDITION) and write:
                 self.cmd_pend, self.cmd_cond, self.cmd_word = 1, int(cir == CIR_CONDITION), value & 0xFFFF
                 self.resp, self.oneshot, self.expect = 0x8900, 0, EXP_RESP
+                self.fresh = 1
             elif cir == CIR_OPERAND:
                 if write:
                     self.opw_data, self.opw_valid = value & 0xFFFFFFFF, 1
@@ -154,7 +172,7 @@ class Biu:
         if cir == CIR_CONTROL and write:
             ev['abort'] = 1
             self.pv, self.resp, self.oneshot, self.expect = 0, 0x0802, 0, EXP_CMD
-            self.cmd_pend = self.opw_valid = self.opr_valid = 0
+            self.cmd_pend = self.opw_valid = self.opr_valid = self.fresh = 0
             self.save_valid = self.save_req = 0
             self.restore_req = self.restore_valid = 0
             self.restore_xfer = self.xfer = 0

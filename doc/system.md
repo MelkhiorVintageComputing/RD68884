@@ -44,11 +44,11 @@ The element's report for the run under test:
 
 | Count | Value |
 |---|---|
-| Coprocessor-interface accesses | 6874 |
+| Coprocessor-interface accesses | 6849 |
 | General instructions | 852 |
 | Conditional instructions | 57 |
-| FSAVEs | 1252 |
-| FRESTOREs | 627 |
+| FSAVEs | 1250 |
+| FRESTOREs | 626 |
 | Core clocks | 1.86 × 10⁹ |
 | Bus cycles | 2.24 × 10⁸ |
 | Faults | 5623 |
@@ -63,10 +63,12 @@ Over the run, RD68884 answered:
 
 | | Count |
 |---|---|
-| Coprocessor-interface accesses | 9468 |
+| Coprocessor-interface accesses | 8410 |
 | General instructions | 860 |
 | Conditional instructions | 57 |
-| FSAVEs | 1264 |
-| FRESTOREs | 633 |
+| FSAVEs | 1282 |
+| FRESTOREs | 642 |
 
-The extra accesses are come-again polls. On the same clock a response read can arrive before the sequencer has answered, and is told to come again: `doc/timing-divergences.md`, "One clock for everything".
+The extra accesses are come-again polls while the FPU computes at the bus clock. Before the response hold-off (`doc/bus-timing.md`) there were 9468: a response read could also arrive before the sequencer had answered a command it had just taken.
+
+How many instructions and context switches a run sees varies a little with timing, because SunOS's clock interrupts land differently. In one run the scripted login also typed a line just before the shell printed its prompt, and the consoles then differed only in where that echo fell. Repeated, the run passed.

@@ -122,3 +122,19 @@ The same-clock front end trades the synchronisers and the stale guard (11 flip-f
 - **`biu_tb`**, built with `BIU_SYNC`, runs every test on all three port widths on a bus model that follows the MC68020's edges on the BIU's own clock, at 16.67, 20, 25 and 33.33 MHz. Each cycle is held to an exact count: its wait states are the rising edges before the BIU took or acknowledged it, and on each of those the BIU must have been unable to. A BIU that acknowledges a ready write a clock late fails it (checked by mutation).
 - **`make sys BUS_SYNC=1`** runs every program on RD68021 with the FPU on the same clock, on all three ports, in lockstep with the ISS.
 - **`make cycles`** measures the result: `doc/timing-divergences.md`.
+
+## The response hold-off
+
+A response read can arrive after the sequencer has taken a command or condition but before it has answered. The sequencer needs 7 to 20 core clocks to start an instruction or evaluate a predicate. Such a read would get the null come-again primitive, and the main processor would poll again. On the same clock that poll costs RD68021 about eleven clocks.
+
+So the BIU withholds DSACK on that read, which FPU 10.5 allows:
+- **It holds** only while the command has been taken (`cmd_pend` cleared) and no response has been written since. The bound is `RESP_HOLD` clocks, a parameter of `rd68884_top`, 20 by default.
+- **When the hold runs out,** the read gets come-again as before.
+- **A command the sequencer has not taken** gets come-again at once, because the sequencer is still computing the previous instruction. The wait could then be long, and the main processor takes interrupts between polls (FPU 8.3).
+
+Interrupt latency grows by at most `RESP_HOLD` core clocks. It applies to every build. `biu_tb` checks the three cases:
+- answered during the hold;
+- held exactly `RESP_HOLD` clocks, then come-again;
+- not taken, not held.
+
+`tools/iss/biu.py` follows the same rule. The measured effect is in `doc/timing-divergences.md`.

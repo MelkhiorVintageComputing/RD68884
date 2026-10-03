@@ -535,6 +535,47 @@ module biu_tb;
     rd_check(5'h00, 2, 32'h0802, "still idle");
   endtask
 
+  // The response hold-off (rtl/rd68884_biu.sv, RESP_HOLD = 20 clocks): a
+  // response read that finds a command taken by the sequencer but unanswered
+  // waits for the answer, and gets it; with no answer it gets the null
+  // come-again primitive once the hold is over. A command the sequencer has not
+  // taken is answered come-again at once.
+  // The longest the BIU has held a response read since max_hold was cleared.
+  integer max_hold = 0;
+  always @(posedge clk) if (dut.resp_wait_q > max_hold) max_hold = dut.resp_wait_q;
+
+  task automatic t_resp_hold();
+    logic [31:0] v;
+    where = "response hold-off";
+    wr(5'h0A, 2, 32'h5422);
+    ack_cmd();
+    fork
+      rd(5'h00, 2, v);
+      begin
+        repeat (6) @(posedge clk);
+        seq_resp(16'h9504, 1, E_OPW);
+      end
+    join
+    check(v == 32'h9504, $sformatf("answered during the hold: read $%0h", v));
+    wr(5'h02, 2, 32'h0000);                           // abort: back to idle
+    idle(2);
+    wr(5'h0A, 2, 32'h5422);
+    ack_cmd();
+    max_hold = 0;
+    rd(5'h00, 2, v);
+    check(v == 32'h8900, $sformatf("unanswered: come-again after the hold, read $%0h", v));
+    check(max_hold == 20, $sformatf("held %0d clocks, want the hold-off's 20", max_hold));
+    wr(5'h02, 2, 32'h0000);
+    idle(2);
+    wr(5'h0A, 2, 32'h5422);
+    max_hold = 0;
+    rd(5'h00, 2, v);
+    check(v == 32'h8900, $sformatf("not taken: come-again, read $%0h", v));
+    check(max_hold == 0, $sformatf("not taken: held %0d clocks", max_hold));
+    wr(5'h02, 2, 32'h0000);
+    idle(2);
+  endtask
+
   task automatic t_command_and_oneshot();
     logic [31:0] v;
     integer n0;
@@ -872,6 +913,7 @@ module biu_tb;
         do_reset();
         t_idle_and_reserved();
         t_command_and_oneshot();
+        t_resp_hold();
         t_backpressure();
         t_short_operands();
         t_operand_read();

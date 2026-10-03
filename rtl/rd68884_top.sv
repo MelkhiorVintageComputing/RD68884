@@ -28,7 +28,8 @@
 
 module rd68884_top #(
     parameter int BUS_SYNC      = 0,
-    parameter int BUS_SYNC_WAIT = 0
+    parameter int BUS_SYNC_WAIT = 0,
+    parameter int RESP_HOLD     = 20     // doc/bus-timing.md, "Response hold-off"
 ) (
     input  logic        clk,
     input  logic        rst_n,
@@ -72,7 +73,8 @@ module rd68884_top #(
 
   rd68884_biu #(
       .BUS_SYNC     (BUS_SYNC),
-      .BUS_SYNC_WAIT(BUS_SYNC_WAIT)
+      .BUS_SYNC_WAIT(BUS_SYNC_WAIT),
+      .RESP_HOLD    (RESP_HOLD)
   ) u_biu (
       .clk           (clk),
       .rst_n         (rst_n),

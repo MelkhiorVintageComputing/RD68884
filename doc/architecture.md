@@ -45,7 +45,7 @@ The design follows the original's split: a bus interface unit (BIU) and a microc
   - Immediate .B/.W operands are counted by length.
 - **Operand CIR:** one 32-bit staging register in each direction, handed over with valid/acknowledge. An access the sequencer is not ready for is held off by withholding DSACK (FPU 10.5); the sequencer keeps the counts.
 - **Implemented in M3:** 242 LUTs and 329 flip-flops (doc/size-and-speed.md). The sequencer interface is listed in the header of `rtl/rd68884_biu.sv`.
-- **Response register with `resp_valid`.** The microcode writes it. While `resp_valid` is clear, DSACK is held off for a short bounded time.
+- **Response register.** The microcode writes it. A response read that arrives after the sequencer has taken a command but before it has answered is held off, by withholding DSACK, for at most `RESP_HOLD` clocks (`doc/bus-timing.md`, "The response hold-off").
 - **Lifetime of primitives:**
   - One-shot primitives (evaluate-EA, transfer-single, transfer-multiple) revert to `$8900` once they have been read.
   - Take-exception primitives persist until a write to the control CIR.

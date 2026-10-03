@@ -229,6 +229,9 @@ class IssOnly(unittest.TestCase):
         """FSAVE while an instruction waits for its first primitive to be read:
         an idle frame with the instruction pending, restarted by FRESTORE."""
         fpu = Machine()
+        # The read must find the instruction unanswered: no response hold-off,
+        # as when a read has outwaited it (rtl/rd68884_biu.sv, RESP_HOLD).
+        fpu.biu.resp_hold = 0
         m = MPU(fpu)
         done = []
 

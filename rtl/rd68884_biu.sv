@@ -46,7 +46,15 @@
 //   - reads of write-only, reserved and unimplemented CIRs return all ones and
 //     their writes are ignored, FPU 7.2.
 // An operand access the sequencer is not ready for is held off by withholding
-// DSACK, which FPU 10.5 allows.
+// DSACK, which FPU 10.5 allows. So is, briefly, a response read that arrives
+// after the sequencer has taken a command or condition but before it has
+// answered: for up to RESP_HOLD clocks, the time it takes to start an
+// instruction or evaluate a predicate, after which the read gets the null
+// come-again primitive as before. Without it, the main processor reads
+// come-again and polls again, which costs it more than the wait. A command the
+// sequencer has not taken -- it is still computing the previous instruction --
+// is answered come-again at once: the wait could be long, and the main
+// processor takes interrupts between polls (doc/timing-divergences.md).
 //
 // The golden model of all of this is tools/model/cpif.py.
 //
@@ -75,7 +83,8 @@
 
 module rd68884_biu #(
     parameter int BUS_SYNC      = 0,     // 1: clk is the main processor's CLK
-    parameter int BUS_SYNC_WAIT = 0      // with BUS_SYNC: 1 = one wait state
+    parameter int BUS_SYNC_WAIT = 0,     // with BUS_SYNC: 1 = one wait state
+    parameter int RESP_HOLD     = 20     // clocks a fresh response read may wait
 ) (
     input  logic        clk,
     input  logic        rst_n,
@@ -412,6 +421,8 @@ module rd68884_biu #(
   logic [31:0] fpiar_q;
   logic [31:0] wstage_q;         // write bytes collected so far
   logic [31:0] hold_q;           // read value snapshotted on the first part
+  logic        resp_fresh_q;     // a command latched, not yet answered
+  logic [5:0]  resp_wait_q;      // clocks the current response read has waited
   logic        hold_save_q;      // ... the save read it was a format word
 
   assign cmd_pend_o     = cmd_pend_q;
@@ -472,13 +483,22 @@ module rd68884_biu #(
     end
   end
 
+  // A response read waits while the command just latched has been taken by
+  // the sequencer but not answered, for at most RESP_HOLD clocks (see the
+  // header). Only the first part of a split read: the rest reads the snapshot.
+  localparam logic [5:0] HOLD_CLKS = RESP_HOLD[5:0];   // up to 63
+  logic resp_hold;
+  assign resp_hold = resp_fresh_q && !cmd_pend_q && (resp_wait_q < HOLD_CLKS);
+
   // Can this access complete now? An operand access waits for the sequencer
   // (FPU 10.5), as does the read-back of a restore format word.
   logic ready;
   always_comb begin
     ready = 1'b1;
     if (!violation && !pv_q) begin
-      if (is_oper && rd_d) begin
+      if (is_resp && rd_d && first_part) begin
+        ready = ~resp_hold;
+      end else if (is_oper && rd_d) begin
         ready = opr_valid_q;                  // every part reads opr_q
       end else if (is_oper && !rd_d && last_part) begin
         ready = ~opw_valid_q;
@@ -593,6 +613,8 @@ module rd68884_biu #(
       wstage_q        <= 32'd0;
       hold_q          <= 32'hFFFF_FFFF;
       hold_save_q     <= 1'b0;
+      resp_fresh_q    <= 1'b0;
+      resp_wait_q     <= 6'd0;
       resp_q          <= rd68884_pkg::PRIM_NULL_IDLE;
       oneshot_q       <= 1'b0;
       expect_q        <= rd68884_pkg::EXP_CMD;
@@ -676,7 +698,14 @@ module rd68884_biu #(
       if (take && first_part && is_resp) begin
         resp_dirty_q <= 1'b0;
       end
+      // The clocks the response read now waiting has waited.
+      if ((state == S_DECODE) && is_resp && rd_d && first_part && resp_hold) begin
+        resp_wait_q <= resp_wait_q + 6'd1;
+      end else begin
+        resp_wait_q <= 6'd0;
+      end
       if (resp_we_i && !(resp_cond_i && (cmd_pend_q || ev_cmd))) begin
+        resp_fresh_q <= 1'b0;
         resp_q       <= resp_i;
         oneshot_q    <= resp_oneshot_i;
         resp_dirty_q <= 1'b1;
@@ -733,6 +762,7 @@ module rd68884_biu #(
         cmd_pend_q <= 1'b1;
         cmd_cond_q <= is_cond;
         cmd_word_q <= wmerged[31:16];
+        resp_fresh_q <= 1'b1;
         resp_q     <= rd68884_pkg::PRIM_NULL_WAIT;
         oneshot_q  <= 1'b0;
         expect_q   <= rd68884_pkg::EXP_RESP;
@@ -791,6 +821,7 @@ module rd68884_biu #(
         // FPU 6.1.12: the take-mid-instruction primitive with the protocol
         // violation vector, at once.
         pv_q      <= 1'b1;
+        resp_fresh_q <= 1'b0;
         resp_q    <= rd68884_pkg::PRIM_PROTOCOL;
         oneshot_q <= 1'b0;
       end
@@ -798,6 +829,7 @@ module rd68884_biu #(
         // Like resp_cond_i: a command latched meanwhile keeps its $8900.
         pv_q <= 1'b0;
         if (!cmd_pend_q && !ev_cmd) begin
+          resp_fresh_q <= 1'b0;
           resp_q    <= rd68884_pkg::PRIM_NULL_IDLE;
           oneshot_q <= 1'b0;
           expect_q  <= rd68884_pkg::EXP_CMD;
@@ -807,6 +839,7 @@ module rd68884_biu #(
         // FPU 7.2.2: terminate, clear pending exceptions (the sequencer's
         // business), reset the BIU to idle.
         pv_q            <= 1'b0;
+        resp_fresh_q    <= 1'b0;
         resp_q          <= rd68884_pkg::PRIM_NULL_IDLE;
         oneshot_q       <= 1'b0;
         expect_q        <= rd68884_pkg::EXP_CMD;
