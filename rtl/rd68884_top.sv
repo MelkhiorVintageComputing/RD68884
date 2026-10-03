@@ -20,8 +20,16 @@
 // The bus interface unit (rd68884_biu) and the microsequencer with its
 // datapath (rd68884_seq). M4: every dialog; the arithmetic arrives in M5
 // (doc/architecture.md).
+//
+// BUS_SYNC selects the BIU's front end (doc/bus-timing.md): 0, the default,
+// takes the bus as asynchronous and clk as any clock; 1 requires clk to be the
+// main processor's CLK and answers on its edges, with BUS_SYNC_WAIT wait states
+// (0 or 1).
 
-module rd68884_top (
+module rd68884_top #(
+    parameter int BUS_SYNC      = 0,
+    parameter int BUS_SYNC_WAIT = 0
+) (
     input  logic        clk,
     input  logic        rst_n,
 
@@ -62,7 +70,10 @@ module rd68884_top (
   logic [7:0]  rsel;
   logic [5:0]  save_xfer, restore_xfer;
 
-  rd68884_biu u_biu (
+  rd68884_biu #(
+      .BUS_SYNC     (BUS_SYNC),
+      .BUS_SYNC_WAIT(BUS_SYNC_WAIT)
+  ) u_biu (
       .clk           (clk),
       .rst_n         (rst_n),
       .reset_n_i     (reset_n_i),

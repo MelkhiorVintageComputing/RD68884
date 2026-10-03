@@ -7,6 +7,8 @@
 #
 #   scripts/questa.sh <build-dir> <top> <file>...
 #
+# QUESTA_G, if set, is passed to vopt: top-level parameters, as -GNAME=VALUE.
+#
 # Only vlog and vopt are used. Neither needs a licence; vsim does, and this machine
 # has none, so nothing simulates here. The binaries live in linux_x86_64/, not bin/.
 set -euo pipefail
@@ -26,4 +28,4 @@ rm -rf "$WORK"
 mkdir -p "$BUILD"
 "$BIN/vlib" "$WORK"
 "$BIN/vlog" -sv -work "$WORK" -quiet "$@"
-"$BIN/vopt" -work "$WORK" -quiet "$TOP" -o "${TOP}_opt"
+"$BIN/vopt" -work "$WORK" -quiet ${QUESTA_G:-} "$TOP" -o "${TOP}_opt"

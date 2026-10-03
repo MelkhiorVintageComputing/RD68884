@@ -150,8 +150,8 @@ _start:
         fmove.x xdata + 12, %fp1
         fmove.p %fp1, BUF{#17}
         clr.l   frames
-        move.l  #20, IRQ
-        fmove.p %fp1, BUF2{#17}
+        move.l  #100, IRQ                   | into the computation, whatever the FPU's
+        fmove.p %fp1, BUF2{#17}             | clock (with BUS_SYNC=1, the CPU's own)
         bsr     cmp_bufs3
         move.l  frames, %d0
         move.l  #1, %d1

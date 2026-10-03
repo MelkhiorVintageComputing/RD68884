@@ -53,8 +53,10 @@ struct rdm {
   int fpu_tail, fpu_left;
 };
 
+// Built with RD_FPU_SAMECLK, the FPU is the same-clock one and runs on the
+// core's own edges (doc/bus-timing.md): no clock of its own to advance.
 static void fpu_run(struct rdm *m) {
-#ifdef RD_MH882
+#if defined(RD_MH882) && !defined(RD_FPU_SAMECLK)
   if (m->fpu_tail) {
     if (m->top->fpu_cs || m->top->reset_n_oe || !m->top->rst_n) m->fpu_left = m->fpu_tail;
     else if (m->fpu_left == 0) return;

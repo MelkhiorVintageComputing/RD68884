@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: CERN-OHL-S-2.0
+# Copyright 2026 Romain Dolbeau
+# Source location: https://github.com/MelkhiorVintageComputing/RD68884
+
+# RD68884 timing constraints for the same-clock BIU (BUS_SYNC = 1;
+# doc/bus-timing.md). The Makefile fills in the @...@ values and writes the
+# result to build/; this is the template.
+#
+# clk is the MC68020's CLK: @CLK@ ns. Every external time below is the main
+# processor's, from its AC table (UM = MC68020UM_split), plus what the board
+# adds; out of context there are no pads, so these are the times at the core's
+# ports.
+
+create_clock -period @CLK@ -name clk -waveform {0.000 @HALF@} [get_ports clk]
+
+# rst_n is asynchronous by construction, RESET passes a synchroniser.
+set_false_path -from [get_ports rst_n]
+set_false_path -from [get_ports reset_n_i]
+
+# The strobes, asserted and negated within @IN@ ns of a falling edge (UM specs
+# 9 and 12, 30 ns at 16.67 MHz) and seen on the next rising edge: half a clock.
+# CS is the board's decode of the address and FC, counted with them.
+set_input_delay -clock clk -clock_fall -max @IN@ [get_ports {cs_n_i as_n_i ds_n_i}]
+set_input_delay -clock clk -clock_fall -min 0    [get_ports {cs_n_i as_n_i ds_n_i}]
+
+# With one wait state (BUS_SYNC_WAIT = 1) the strobes also enter a register
+# rank, which may miss that edge by design: a strobe it misses is taken a clock
+# later, one wait state more, and the rank has a clock to settle before it is
+# read. So those paths are not timed; every other path from the strobes is.
+@RANK@
+
+# A, R/W and the SIZE strap: valid within @AIN@ ns of the rising edge entering
+# S0 (UM spec 6), a clock before the edge entering S2.
+set_input_delay -clock clk -max @AIN@ [get_ports {a_i[*] rw_i size_n_i}]
+set_input_delay -clock clk -min 0     [get_ports {a_i[*] rw_i size_n_i}]
+
+@AMC@
+
+# Their hold checks are not real: A, R/W and SIZE change on the rising edge
+# entering S0 (UM specs 6, 8, 20), where no cycle is being taken, and the write
+# data on the one entering S2, while a write is taken on the next. A held
+# value is never captured on the edge it changes on.
+set_false_path -hold -from [get_ports {a_i[*] rw_i size_n_i d_i[*]}]
+
+# Write data: driven from the rising edge entering S2 and valid within @DIN@ ns
+# (UM spec 23), taken on the next rising edge.
+set_input_delay -clock clk -max @DIN@ [get_ports {d_i[*]}]
+set_input_delay -clock clk -min 0     [get_ports {d_i[*]}]
+
+# R/W also reaches DSACK and the data enables without a register, through
+# START (DS + /R/W): valid from the rising edge entering S0, it has until the
+# falling edge entering S3, a clock and a half.
+set_multicycle_path -setup 2 -from [get_ports rw_i] -to [get_ports {dsack_n_o[*] dsack_oe d_oe[*]}]
+set_multicycle_path -hold  1 -from [get_ports rw_i] -to [get_ports {dsack_n_o[*] dsack_oe d_oe[*]}]
+
+# DSACK: sampled on the falling edge entering S3 (or a wait state's), with
+# @SETUP@ ns of setup (UM spec 47A). Registered on the rising edge before it:
+# half a clock.
+set_output_delay -clock clk -clock_fall -max @SETUP@ [get_ports {dsack_n_o[*] dsack_oe}]
+set_output_delay -clock clk -clock_fall -min 0       [get_ports {dsack_n_o[*] dsack_oe}]
+
+# Read data: latched on the falling edge entering S5, @SETUP@ ns of setup (UM
+# spec 27) -- a clock and a half after the rising edge that registers it.
+set_output_delay -clock clk -clock_fall -max @SETUP@ [get_ports {d_o[*] d_oe[*]}]
+set_output_delay -clock clk -clock_fall -min 0       [get_ports {d_o[*] d_oe[*]}]
+set_multicycle_path -setup 2 -from [get_clocks clk] -to [get_ports {d_o[*] d_oe[*]}]
+set_multicycle_path -hold  1 -from [get_clocks clk] -to [get_ports {d_o[*] d_oe[*]}]

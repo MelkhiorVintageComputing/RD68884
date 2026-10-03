@@ -7,8 +7,10 @@
 // running a program from memory, with RD68884 as its coprocessor at CpID 1.
 //
 //   memory     RD68021's own slave model, a 32-bit port at $0, 64 KB
-//   the FPU    on a clock of its own (+fpu_ns, default 20 ns against the CPU's
-//              60), behind an early chip select decoded from FC = 7, A19-A16 =
+//   the FPU    on a clock of its own (+fpu_ns, default 20 ns against the
+//              CPU's 60) -- or, built with SYS_BUS_SYNC, the same-clock BIU
+//              (BUS_SYNC = 1, BUS_SYNC_WAIT = SYS_BUS_SYNC_WAIT) on the CPU's
+//              own clock -- behind an early chip select decoded from FC = 7, A19-A16 =
 //              2, A15-A13 = 1 (FPU 10.3, figure 10-4); SIZE and A0 strapped for
 //              the port width of the build (SYS_PORT 32, 16 or 8), the data
 //              lanes of a narrow port tied as the board would (FPU section 11)
@@ -34,6 +36,15 @@
 
 `ifndef SYS_PORT
 `define SYS_PORT 32
+`endif
+
+`ifdef SYS_BUS_SYNC
+`ifndef SYS_BUS_SYNC_WAIT
+`define SYS_BUS_SYNC_WAIT 0
+`endif
+`define FCLK clk
+`else
+`define FCLK clk_fpu
 `endif
 
 module sys_tb;
@@ -133,8 +144,12 @@ module sys_tb;
     end
   endgenerate
 
+`ifdef SYS_BUS_SYNC
+  rd68884_top #(.BUS_SYNC(1), .BUS_SYNC_WAIT(`SYS_BUS_SYNC_WAIT)) fpu (
+`else
   rd68884_top fpu (
-      .clk (clk_fpu), .rst_n (rst_n), .reset_n_i (1'b1),
+`endif
+      .clk (`FCLK), .rst_n (rst_n), .reset_n_i (1'b1),
       .cs_n_i (cs_n), .as_n_i (as_n_o), .ds_n_i (ds_n_o), .rw_i (rw_o),
       .size_n_i (PORT != 8),
       .a_i ({a_o[4:1], (PORT == 32) ? 1'b1 : (PORT == 16) ? 1'b0 : a_o[0]}),
@@ -238,7 +253,7 @@ module sys_tb;
   end
   // BIU outputs, then the sequencer's outputs, then its micro-address, in the
   // order tools/iss/lockstep.py reads them. Sampled just before the edge.
-  always @(posedge clk_fpu) if (ls != 0 && rst_n) begin
+  always @(posedge `FCLK) if (ls != 0 && rst_n) begin
     $fwrite(ls, "%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h | ",
       fpu.arch_reset, fpu.cmd_pend, fpu.cmd_cond, fpu.cmd_word, fpu.opw_valid,
       fpu.opw_data, fpu.opr_valid, fpu.save_req, fpu.restore_req,
@@ -284,7 +299,12 @@ module sys_tb;
         $fdisplay(fd, "%08h", peek(RES + 32'h100 + 4 * k));
       $fclose(fd);
     end
+`ifdef SYS_BUS_SYNC
+    $display("sys_tb: port %0d, FPU on the CPU's clock, BUS_SYNC_WAIT %0d, %0d CPU clocks",
+             PORT, `SYS_BUS_SYNC_WAIT, n);
+`else
     $display("sys_tb: port %0d, FPU clock %.1f ns, %0d CPU clocks", PORT, fpu_ns, n);
+`endif
     if (peek(RES) !== DONE) begin
       $display("FAIL: sys_tb: the program did not finish (PC %08h)", cpu.u_ifu.pc_d);
     end else if (peek(RES + 32'h10) !== 0) begin

@@ -23,6 +23,8 @@ Size is the project's first goal (CLAUDE.md), so every milestone records what it
 | M8 busy frames | synth | 4441 | 915 | 6 | 21 | WNS +5.69 ns at 20 ns | +61 LUTs: `SEQST` (the return stack's top into TBUS, and the push), `REST_BUSY`; 3128 microcode words |
 | M9 | impl | 4349 | 915 | 6 | 21 | 55.4 MHz (18.04 ns) | the final design; limited by microword → `A`'s exponent, 36 levels. 21% of the 35T's LUTs, 2% of its flip-flops, 7% of its DSPs, 42% of its block RAM |
 | M9 | Quartus fit | 5,770 ALMs | 1,189 | 5 | 64 M10K | — | `make quartus`, for portability: 18% of the device |
+| same-clock BIU, zero wait | impl | 4358 | 904 | 6 | 21 | 16.67 MHz bus = core; pins met with strobes ≤ ~18 ns after ↓ (not a real MC68020's 30 ns) | `make impl BUS_SYNC=1`, doc/bus-timing.md |
+| same-clock BIU, one wait | impl | 4356 | 908 | 6 | 21 | 33.33 MHz bus = core, pins met against the MC68020's 33 MHz specs; core paths 19.95 ns | `make impl BUS_SYNC=1 BUS_SYNC_WAIT=1 SYNC_CLK_NS=30 ...` |
 
 M5 notes:
 - The utilisation-by-hierarchy report puts most of these LUTs in `u_rom`. Vivado has optimised across the ROM's boundary, so its outputs are decoded control rather than the 116 stored bits: the instance has 613 output pins and no flip-flops of its own besides the 3 RAMB36. Only the total is meaningful.

@@ -7,7 +7,7 @@ The ports of `rd68884_top` are the MC68881's pins (FPU section 9, table 9-5), wi
 
 | Port | Dir | Pin | Notes |
 |---|---|---|---|
-| `clk` | in | — | Core clock. **Not** the MC68881's CLK pin; see below |
+| `clk` | in | — | Core clock. **Not** the MC68881's CLK pin, except with the same-clock BIU; see below |
 | `rst_n` | in | — | Hardware initialisation; every register resets from it |
 | `reset_n_i` | in | RESET | Architectural reset (FPU 9.9) |
 | `cs_n_i` | in | CS | Decoded externally: FC = 7, A19–A16 = 0010, A15–A13 = CpID (FPU 7.1) |
@@ -47,3 +47,8 @@ The ports of `rd68884_top` are the MC68881's pins (FPU section 9, table 9-5), wi
 - Any core clock works. A slower one only adds wait states to CIR accesses (doc/bus-timing.md). The datapath is constrained at 50 MHz, from a board PLL.
 - `doc/architecture.md`, "Clocking", explains why.
 - The MC68881's CLK pin is the PLL's reference and nothing else.
+
+**The same-clock BIU** (`BUS_SYNC = 1`, doc/bus-timing.md) changes that:
+- `clk` must be the main processor's CLK: the same clock, edge for edge, not just the same frequency.
+- The core then runs at the bus clock, and CIR accesses take no wait states (one with `BUS_SYNC_WAIT = 1`).
+- The other ports are unchanged.

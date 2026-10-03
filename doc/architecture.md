@@ -30,6 +30,10 @@ The design follows the original's split: a bus interface unit (BIU) and a microc
   - It makes even a strobe-negated gap shorter than one core clock visible (specification 13).
   - So the core clock has no minimum relative to the bus; a slow one only adds wait states. The testbench runs core = bus. This replaces the planned "core ≥ 2.5× bus" rule: doc/bus-timing.md.
 - **The 50 MHz target comes from the datapath**, not from the bus.
+- **A second front end, selected at build time:** `BUS_SYNC = 1` is for a board where the core runs on the main processor's own CLK.
+  - It drops the synchronisers and the stale guard, and answers on the MC68020's clock edges: no wait states, or one with `BUS_SYNC_WAIT = 1`.
+  - Everything behind the front end, the CIR registers, the protocol checks and the events, is the same code.
+  - `doc/bus-timing.md`, "The same-clock BIU".
 - The optional synchronous-read mode is not reproduced. Every cycle is answered asynchronously, which the protocol allows.
 
 ### BIU (`rd68884_biu`, about 600 LUTs)

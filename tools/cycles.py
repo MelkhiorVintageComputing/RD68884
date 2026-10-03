@@ -6,7 +6,8 @@
 """Instruction clock counts against FPU section 8 (doc/timing-divergences.md).
 
     python3 tools/cycles.py gen OUT.S [--only TEXT]
-    python3 tools/cycles.py check DUMP DUMP_FAST [--doc DOC] [--freeze]
+    python3 tools/cycles.py check DUMP DUMP_FAST [--sync DUMP] [--slow DUMP]
+                                  [--doc DOC] [--freeze]
 
 Adapted from RD68021's tools/cycles.py. `gen` writes a program for
 sim/tb/sys_tb.sv: RD68021 as the MC68020 and RD68884 on a 32-bit port, the
@@ -27,13 +28,16 @@ are the whole instruction, the part the MC68881 lets the MPU overlap included
 reset), as Table 8-2 assumes: "instruction prefetches do not hit in the
 MC68020 cache (or it is disabled)" (FPU 8.5.1).
 
-`check` reads two dumps of the results: one at the design's clocks (the FPU's
-core three times the bus clock, sys_tb's default) and one with the FPU's core
+`check` reads the dumps of the results: one at the design's clocks (the FPU's
+core three times the bus clock, sys_tb's default), one with the FPU's core
 thirty times as fast, where what is left is close to the main processor and
-the protocol alone. It compares the count with the frozen one
-(tools/cycles.frozen) and fails if any row moved -- faster or slower, a change
-someone has to look at and then freeze with --freeze -- and it regenerates the
-table in DOC between its markers.
+the protocol alone, and optionally one with the same-clock BIU (BUS_SYNC = 1,
+no wait states: the FPU on the CPU's clock) and one with the asynchronous BIU
+at that clock, for reference (doc/bus-timing.md). It compares the design's
+count with the frozen one (tools/cycles.frozen), and the same-clock count with
+tools/cycles-sync.frozen, and fails if any row moved -- faster or slower, a
+change someone has to look at and then freeze with --freeze -- and it
+regenerates the tables in DOC between their markers.
 
 For the arithmetic rows it also runs the instruction on the ISS alone
 (iss_clocks): RD68884's core clocks, with a main processor that never waits.
@@ -50,6 +54,7 @@ import sys
 from fractions import Fraction
 
 FROZEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cycles.frozen')
+FROZEN_SYNC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cycles-sync.frozen')
 
 RES = 0xC000
 CNT = RES + 0x88
@@ -454,44 +459,51 @@ def load(path, n):
     return v
 
 
-def load_frozen():
+def load_frozen(path):
     fr = {}
-    if os.path.exists(FROZEN):
-        for line in open(FROZEN):
+    if os.path.exists(path):
+        for line in open(path):
             if line.strip() and not line.startswith('#'):
                 name, n = line.rstrip('\n').rsplit('\t', 1)
                 fr[name] = int(n)
     return fr
 
 
-def measure(dump, fast):
+def measure(dumps):
+    """Each row: (row, {column: clocks}), less the calibration row, for every
+    dump given (a dict of column -> path)."""
     rows = all_rows()
-    a, b = load(dump, len(rows)), load(fast, len(rows))
-    out = []
-    for i, r in enumerate(rows[1:], 1):
-        out.append((r, a[i] - a[0], b[i] - b[0]))
-    return out
+    got = {k: load(p, len(rows)) for k, p in dumps.items() if p}
+    return [(r, {k: v[i] - v[0] for k, v in got.items()}) for i, r in enumerate(rows[1:], 1)]
 
 
-def check(dump, fast, doc=None, freeze=False):
-    res = measure(dump, fast)
-    if freeze:
-        with open(FROZEN, 'w') as f:
-            f.write('# tools/cycles.py --freeze: each row\'s count, in CPU clocks.\n')
-            for r, n, _ in res:
-                f.write(f'{r[0]}\t{n}\n')
-    fr = load_frozen()
+def check(dumps, doc=None, freeze=False):
+    """dumps: 'n' (the design point), 'fast' (FPU x30), and optionally 'sync'
+    (the same-clock BIU, frozen too) and 'slow' (the asynchronous BIU at the
+    bus clock, for reference)."""
+    res = measure(dumps)
     bad = 0
-    for r, n, _ in res:
-        if fr.get(r[0]) != n:
-            print(f'  FAIL: {r[0]}: {n} clocks, frozen at {fr.get(r[0])}')
-            bad += 1
-    man = sum(r[4] for r, _, _ in res)
-    ours = sum(w for _, w, _ in res)
-    faster = sum(1 for r, w, _ in res if w < r[4])
-    slower = sum(1 for r, w, _ in res if w > r[4])
+    for col, path, what in (('n', FROZEN, ''), ('sync', FROZEN_SYNC, ', same clock')):
+        if col not in res[0][1]:
+            continue
+        if freeze:
+            with open(path, 'w') as f:
+                f.write(f'# tools/cycles.py --freeze: each row\'s count{what}, in CPU clocks.\n')
+                for r, c in res:
+                    f.write(f'{r[0]}\t{c[col]}\n')
+        fr = load_frozen(path)
+        for r, c in res:
+            if fr.get(r[0]) != c[col]:
+                print(f'  FAIL: {r[0]}{what}: {c[col]} clocks, frozen at {fr.get(r[0])}')
+                bad += 1
+    man = sum(r[4] for r, _ in res)
+    ours = sum(c['n'] for _, c in res)
+    faster = sum(1 for r, c in res if c['n'] < r[4])
+    slower = sum(1 for r, c in res if c['n'] > r[4])
     print(f'  cycles: {len(res)} rows, {faster} faster than the MC68881, {slower} slower, '
           f'{len(res) - faster - slower} exact; {ours} clocks where the manual adds up to {man}')
+    if 'sync' in res[0][1]:
+        print(f'  cycles: the same-clock BIU, {sum(c["sync"] for _, c in res)} clocks')
     if doc:
         splice(doc, res, iss_clocks())
     if bad:
@@ -538,36 +550,52 @@ def splice_between(s, tag, text):
 
 
 def splice(doc, res, iss):
+    sync = 'sync' in res[0][1]
     t = ['<!-- cycles:begin -- generated by tools/cycles.py; do not edit -->',
-         '| Instruction | FPU 8 | | RD68884 | Δ | ratio | FPU ×30 | ISS | ratio |',
-         '|---|---:|---|---:|---:|---:|---:|---:|---:|']
-    for r, n, fast in res:
+         '| Instruction | FPU 8 | | RD68884 | Δ | ratio | FPU ×30 | ISS | ratio |'
+         + (' same clock | ratio |' if sync else ''),
+         '|---|---:|---|---:|---:|---:|---:|---:|---:|' + ('---:|---:|' if sync else '')]
+    for r, c in res:
+        n = c['n']
         d = n - r[4]
         ds = f'**+{d}**' if d > 0 else (str(d) if d < 0 else '')
         i = iss.get(r[0])
         ic = f'{i} | {i / r[4]:.2f}' if i is not None else ' | '
-        t.append(f'| `{r[0]}` | {r[4]} | {r[5]} | {n} | {ds} | {n / r[4]:.2f} | {fast} | {ic} |')
+        sc = f' {c["sync"]} | {c["sync"] / r[4]:.2f} |' if sync else ''
+        t.append(f'| `{r[0]}` | {r[4]} | {r[5]} | {n} | {ds} | {n / r[4]:.2f} | {c["fast"]} | {ic} |{sc}')
     t.append('<!-- cycles:end -->')
     s = splice_between(open(doc).read(), 'cycles', '\n'.join(t))
+    extra = [k for k in ('sync', 'slow') if k in res[0][1]]
+    head = {'sync': 'same clock', 'slow': 'asynchronous, core = bus'}
     c = ['<!-- categories:begin -- generated by tools/cycles.py; do not edit -->',
-         '| Rows | | FPU 8 | RD68884 | ratio | FPU ×30 | faster | slower | ISS | ratio |',
-         '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|']
+         '| Rows | | FPU 8 | RD68884 | ratio | FPU ×30 | faster | slower | ISS | ratio |'
+         + ''.join(f' {head[k]} | ratio |' for k in extra),
+         '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|' + '---:|---:|' * len(extra)]
     for k in CATS:
-        g = [(r, n, f) for r, n, f in res if category(r[0]) == k]
-        man, us, fl = (sum(r[4] for r, _, _ in g), sum(n for _, n, _ in g),
-                       sum(f for _, _, f in g))
-        gi = [(r[4], iss[r[0]]) for r, _, _ in g if r[0] in iss]
+        g = [(r, x) for r, x in res if category(r[0]) == k]
+        man = sum(r[4] for r, _ in g)
+        us = sum(x['n'] for _, x in g)
+        fl = sum(x['fast'] for _, x in g)
+        gi = [(r[4], iss[r[0]]) for r, _ in g if r[0] in iss]
         ic = (f'{sum(i for _, i in gi)} | {sum(i for _, i in gi) / sum(m for m, _ in gi):.2f}'
               if gi else ' | ')
+        ex = ''.join(f' {sum(x[e] for _, x in g)} | {sum(x[e] for _, x in g) / man:.2f} |'
+                     for e in extra)
         c.append(f'| {k} | {len(g)} | {man} | {us} | {us / man:.2f} | {fl} | '
-                 f'{sum(1 for r, n, _ in g if n < r[4])} | {sum(1 for r, n, _ in g if n > r[4])} | {ic} |')
+                 f'{sum(1 for r, x in g if x["n"] < r[4])} | {sum(1 for r, x in g if x["n"] > r[4])} | {ic} |'
+                 + ex)
+    if extra:
+        tm = sum(r[4] for r, _ in res)
+        c.append(f'| **all** | {len(res)} | {tm} | {sum(x["n"] for _, x in res)} | '
+                 f'{sum(x["n"] for _, x in res) / tm:.2f} | {sum(x["fast"] for _, x in res)} | | | | |'
+                 + ''.join(f' {sum(x[e] for _, x in res)} | {sum(x[e] for _, x in res) / tm:.2f} |'
+                           for e in extra))
     c.append('<!-- categories:end -->')
     s = splice_between(s, 'categories', '\n'.join(c))
-    # The summary line, between its own markers.
-    man = sum(r[4] for r, _, _ in res)
-    ours = sum(w for _, w, _ in res)
-    faster = sum(1 for r, w, _ in res if w < r[4])
-    slower = sum(1 for r, w, _ in res if w > r[4])
+    man = sum(r[4] for r, _ in res)
+    ours = sum(x['n'] for _, x in res)
+    faster = sum(1 for r, x in res if x['n'] < r[4])
+    slower = sum(1 for r, x in res if x['n'] > r[4])
     summ = (f'<!-- summary:begin -->**{len(res)} rows: {faster} faster than the MC68881, '
             f'{slower} slower, {len(res) - faster - slower} exact; {ours} clocks where the '
             f'manual adds up to {man}** ({100 * (ours - man) / man:+.0f} %).<!-- summary:end -->')
@@ -581,8 +609,11 @@ def main():
         return 0
     if len(sys.argv) >= 4 and sys.argv[1] == 'check':
         args = sys.argv[4:]
-        doc = args[args.index('--doc') + 1] if '--doc' in args else None
-        return check(sys.argv[2], sys.argv[3], doc, '--freeze' in args)
+
+        def opt(name):
+            return args[args.index(name) + 1] if name in args else None
+        dumps = {'n': sys.argv[2], 'fast': sys.argv[3], 'sync': opt('--sync'), 'slow': opt('--slow')}
+        return check(dumps, opt('--doc'), '--freeze' in args)
     print(__doc__)
     return 2
 

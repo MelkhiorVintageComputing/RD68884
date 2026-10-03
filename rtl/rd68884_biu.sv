@@ -49,8 +49,34 @@
 // DSACK, which FPU 10.5 allows.
 //
 // The golden model of all of this is tools/model/cpif.py.
+//
+// THE SAME-CLOCK FRONT END (BUS_SYNC = 1). On a board where clk IS the
+// MC68020's CLK, the strobes are synchronous to it, and the synchronisers and
+// the stale guard only add latency. This front end samples the raw pins on the
+// rising edges of the MC68020's bus cycle (doc/bus-timing.md, "The same-clock
+// BIU"): AS (and DS, reading) are asserted on the falling edge entering S1 (UM
+// spec 9), seen on the rising edge entering S2 (E2), and DSACK registered there
+// is sampled on the falling edge entering S3 -- a cycle with no wait state.
+//   BUS_SYNC_WAIT = 0: a read is answered at E2 from the raw pins; a write is
+//                      acknowledged at E2 and taken at E4, the next rising
+//                      edge, its data driven since E2;
+//   BUS_SYNC_WAIT = 1: CS, AS, DS and R/W pass one register rank, and every
+//                      access is answered at E4 from it: one wait state. A
+//                      strobe that misses E2 is seen at E4 and costs one more,
+//                      and the rank has a whole clock to settle, so a board
+//                      that cannot meet the half clock still works.
+// Write data is taken by its timing, not by DS: the MC68020 drives it from the
+// rising edge entering S2 (UM 5.1.4, 5.3.2) and it is valid within UM spec 23
+// of that edge, so it has been valid for most of a clock at E4. RD68021 drives
+// it from the same edge.
+// The back end -- the registers, the protocol checks, the events -- is the
+// same for every front end. FPU 10.4.1 describes the MC68881's own same-clock
+// timing, which this is faster than.
 
-module rd68884_biu (
+module rd68884_biu #(
+    parameter int BUS_SYNC      = 0,     // 1: clk is the main processor's CLK
+    parameter int BUS_SYNC_WAIT = 0      // with BUS_SYNC: 1 = one wait state
+) (
     input  logic        clk,
     input  logic        rst_n,
 
@@ -147,27 +173,9 @@ module rd68884_biu (
 );
 
   // ==========================================================================
-  // Synchronisers
+  // The front end: the strobes as the core sees them, and the stale guard
   // ==========================================================================
-  // {reset, cs, as, ds, rw}, all as they are at the pin.
-  logic [4:0] pins_q;
-
-  rd68884_sync #(
-      .WIDTH    (5),
-      .RESET_VAL(5'b11111)
-  ) u_sync_pins (
-      .clk  (clk),
-      .rst_n(rst_n),
-      .d    ({reset_n_i, cs_n_i, as_n_i, ds_n_i, rw_i}),
-      .q    (pins_q)
-  );
-
   logic reset_s, cs_s, as_s, ds_s, rd_s;
-  assign reset_s = ~pins_q[4];
-  assign cs_s    = ~pins_q[3];
-  assign as_s    = ~pins_q[2];
-  assign ds_s    = ~pins_q[1];
-  assign rd_s    =  pins_q[0];
   assign arch_reset_o = reset_s;
 
   // START, FPU 10.3: "A cycle start is detected when AS, CS, and DS or R/W (for
@@ -178,32 +186,117 @@ module rd68884_biu (
   logic start_s;
   assign start_s = cs_s & as_s & (ds_s | ~rd_s);
 
-  // ==========================================================================
-  // The stale guard (see the header)
-  // ==========================================================================
   logic stale;
-  logic stale_set;
-  logic stale_clr;
-  assign stale_set = ~start_raw | ~rst_n;
-
-  always_ff @(posedge clk or posedge stale_set) begin
-    if (stale_set) begin
-      stale <= 1'b1;
-    end else if (stale_clr) begin
-      stale <= 1'b0;
-    end
-  end
-
   logic stale_s;
-  rd68884_sync #(
-      .WIDTH    (1),
-      .RESET_VAL(1'b1)
-  ) u_sync_stale (
-      .clk  (clk),
-      .rst_n(rst_n),
-      .d    (stale),
-      .q    (stale_s)
-  );
+  logic stale_clr;
+
+  generate
+    if (BUS_SYNC != 0) begin : g_sync_front
+      // The strobes are synchronous to clk. RESET is not a bus signal and
+      // keeps its synchroniser.
+      logic reset_q;
+      rd68884_sync #(
+          .WIDTH    (1),
+          .RESET_VAL(1'b1)
+      ) u_sync_reset (
+          .clk  (clk),
+          .rst_n(rst_n),
+          .d    (reset_n_i),
+          .q    (reset_q)
+      );
+      assign reset_s = ~reset_q;
+      if (BUS_SYNC_WAIT == 0) begin : g_raw
+        // The pins themselves, at the rising edge entering S2.
+        assign cs_s  = ~cs_n_i;
+        assign as_s  = ~as_n_i;
+        assign ds_s  = ~ds_n_i;
+        assign rd_s  =  rw_i;
+        // No stale guard: between two cycles AS is negated across a rising
+        // edge, and the acknowledge is dropped on it.
+        assign stale = 1'b0;
+      end else begin : g_rank
+        // One rank, read a clock later.
+        logic [3:0] rank_q;
+        always_ff @(posedge clk or negedge rst_n) begin
+          if (!rst_n) begin
+            rank_q <= 4'b1111;
+          end else begin
+            rank_q <= {cs_n_i, as_n_i, ds_n_i, rw_i};
+          end
+        end
+        assign cs_s  = ~rank_q[3];
+        assign as_s  = ~rank_q[2];
+        assign ds_s  = ~rank_q[1];
+        assign rd_s  =  rank_q[0];
+        // The acknowledge is dropped a clock after START, so it also needs
+        // the rank's START: the next cycle's START can come first.
+        assign stale = ~start_s;
+      end
+      assign stale_s = 1'b0;
+      logic unused_stale_clr;
+      assign unused_stale_clr = stale_clr;
+    end else begin : g_async_front
+      // {reset, cs, as, ds, rw}, all as they are at the pin.
+      logic [4:0] pins_q;
+
+      rd68884_sync #(
+          .WIDTH    (5),
+          .RESET_VAL(5'b11111)
+      ) u_sync_pins (
+          .clk  (clk),
+          .rst_n(rst_n),
+          .d    ({reset_n_i, cs_n_i, as_n_i, ds_n_i, rw_i}),
+          .q    (pins_q)
+      );
+
+      assign reset_s = ~pins_q[4];
+      assign cs_s    = ~pins_q[3];
+      assign as_s    = ~pins_q[2];
+      assign ds_s    = ~pins_q[1];
+      assign rd_s    =  pins_q[0];
+
+      // The stale guard (see the header).
+      logic stale_set;
+      logic stale_q;
+      assign stale_set = ~start_raw | ~rst_n;
+
+      always_ff @(posedge clk or posedge stale_set) begin
+        if (stale_set) begin
+          stale_q <= 1'b1;
+        end else if (stale_clr) begin
+          stale_q <= 1'b0;
+        end
+      end
+      assign stale = stale_q;
+
+      rd68884_sync #(
+          .WIDTH    (1),
+          .RESET_VAL(1'b1)
+      ) u_sync_stale (
+          .clk  (clk),
+          .rst_n(rst_n),
+          .d    (stale_q),
+          .q    (stale_s)
+      );
+    end
+  endgenerate
+
+  // The cycle state machine's state, declared here because the decode below
+  // reads it (doc/coding-standard.md: declare before use).
+  typedef enum logic [1:0] {
+    S_IDLE,
+    S_DECODE,
+    S_ACK
+  } cyc_e;
+
+  cyc_e state;
+
+  // Same clock: an access is decoded from the pins in the clock its START is
+  // first seen (A, SIZE and the write data have been valid since an earlier
+  // edge). zero_wait: that clock is the one entering S2.
+  logic same_clk, zero_wait;
+  assign same_clk  = (BUS_SYNC != 0);
+  assign zero_wait = (BUS_SYNC != 0) && (BUS_SYNC_WAIT == 0);
 
   // ==========================================================================
   // Decoding an access
@@ -215,34 +308,45 @@ module rd68884_biu (
   logic        rd_q;
   logic        size_n_q;
 
+  // What the decode reads: the registered access, or, same clock, in the idle
+  // state, the pins themselves.
+  logic [4:0]  a_d;
+  logic        rd_d;
+  logic        size_d;
+  logic        use_pins;
+  assign use_pins = same_clk && (state == S_IDLE);
+  assign a_d      = use_pins ? a_i      : a_q;
+  assign rd_d     = use_pins ? rd_s     : rd_q;
+  assign size_d   = use_pins ? size_n_i : size_n_q;
+
   // CIR identities. A4 = 0: sixteen-bit registers, A3-A1 select. A4 = 1:
   // A3-A2 select a 32-bit register (the register select CIR and its reserved
   // neighbour share one).
   logic is_resp, is_ctrl, is_save, is_rest, is_cmd, is_cond;
   logic is_oper, is_rsel, is_iar;
   always_comb begin
-    is_resp = ~a_q[4] & (a_q[3:1] == 3'b000);
-    is_ctrl = ~a_q[4] & (a_q[3:1] == 3'b001);
-    is_save = ~a_q[4] & (a_q[3:1] == 3'b010);
-    is_rest = ~a_q[4] & (a_q[3:1] == 3'b011);
-    is_cmd  = ~a_q[4] & (a_q[3:1] == 3'b101);
-    is_cond = ~a_q[4] & (a_q[3:1] == 3'b111);
-    is_oper =  a_q[4] & (a_q[3:2] == 2'b00);
-    is_rsel =  a_q[4] & (a_q[3:2] == 2'b01);
-    is_iar  =  a_q[4] & (a_q[3:2] == 2'b10);
+    is_resp = ~a_d[4] & (a_d[3:1] == 3'b000);
+    is_ctrl = ~a_d[4] & (a_d[3:1] == 3'b001);
+    is_save = ~a_d[4] & (a_d[3:1] == 3'b010);
+    is_rest = ~a_d[4] & (a_d[3:1] == 3'b011);
+    is_cmd  = ~a_d[4] & (a_d[3:1] == 3'b101);
+    is_cond = ~a_d[4] & (a_d[3:1] == 3'b111);
+    is_oper =  a_d[4] & (a_d[3:2] == 2'b00);
+    is_rsel =  a_d[4] & (a_d[3:2] == 2'b01);
+    is_iar  =  a_d[4] & (a_d[3:2] == 2'b10);
   end
 
   // Lanes, bit 3 = D31-D24. FPU figure 10-2.
   logic [3:0] lanes;
   always_comb begin
-    if (size_n_q && a_q[0]) begin                     // 32-bit port
-      lanes = a_q[4] ? 4'b1111 : 4'b1100;
-    end else if (size_n_q) begin                      // 16-bit port
-      lanes = (a_q[4] & a_q[1]) ? 4'b0011 : 4'b1100;
-    end else if (a_q[4]) begin                        // 8-bit port
-      lanes = 4'b1000 >> a_q[1:0];
+    if (size_d && a_d[0]) begin                       // 32-bit port
+      lanes = a_d[4] ? 4'b1111 : 4'b1100;
+    end else if (size_d) begin                        // 16-bit port
+      lanes = (a_d[4] & a_d[1]) ? 4'b0011 : 4'b1100;
+    end else if (a_d[4]) begin                        // 8-bit port
+      lanes = 4'b1000 >> a_d[1:0];
     end else begin
-      lanes = a_q[0] ? 4'b0100 : 4'b1000;
+      lanes = a_d[0] ? 4'b0100 : 4'b1000;
     end
   end
 
@@ -251,8 +355,8 @@ module rd68884_biu (
   // (ivl_nexus_ptrs assertion) on the equivalent if/else chain. Measured;
   // doc/coding-standard.md.
   logic [1:0] dsack_val;
-  assign dsack_val = !size_n_q              ? 2'b10 :     // 8-bit
-                     (a_q[0] && a_q[4])     ? 2'b00 :     // 32-bit
+  assign dsack_val = !size_d               ? 2'b10 :     // 8-bit
+                     (a_d[0] && a_d[4])    ? 2'b00 :     // 32-bit
                                               2'b01;      // 16-bit
 
   // Short operands: FPU 10.1 -- an immediate byte or word is one transfer,
@@ -266,7 +370,7 @@ module rd68884_biu (
   logic first_part;
   always_comb begin
     first_part = lanes[3];
-    if (!a_q[4] || is_rsel) begin
+    if (!a_d[4] || is_rsel) begin
       last_part = lanes[2];                           // a 16-bit register
     end else if (is_oper && oplen_q == 2'd1) begin
       last_part = lanes[3];
@@ -353,17 +457,17 @@ module rd68884_biu (
   always_comb begin
     // $14/$15 are the register select CIR, $16/$17 its reserved neighbour:
     // A1 tells them apart on every port (a 32-bit port enables all lanes).
-    touches_rsel = is_rsel & ~a_q[1];
+    touches_rsel = is_rsel & ~a_d[1];
     violation = 1'b0;
-    if ((is_cmd || is_cond) && !rd_q) begin
+    if ((is_cmd || is_cond) && !rd_d) begin
       violation = expect_q != rd68884_pkg::EXP_CMD;
-    end else if (is_oper && !rd_q) begin
+    end else if (is_oper && !rd_d) begin
       violation = expect_q != rd68884_pkg::EXP_OPW;
-    end else if (is_oper && rd_q) begin
+    end else if (is_oper && rd_d) begin
       violation = expect_q != rd68884_pkg::EXP_OPR;
-    end else if (touches_rsel && rd_q) begin
+    end else if (touches_rsel && rd_d) begin
       violation = expect_q != rd68884_pkg::EXP_RSEL;
-    end else if (touches_rsel && !rd_q) begin
+    end else if (touches_rsel && !rd_d) begin
       violation = 1'b1;                       // the one write that always is
     end
   end
@@ -374,11 +478,11 @@ module rd68884_biu (
   always_comb begin
     ready = 1'b1;
     if (!violation && !pv_q) begin
-      if (is_oper && rd_q) begin
+      if (is_oper && rd_d) begin
         ready = opr_valid_q;                  // every part reads opr_q
-      end else if (is_oper && !rd_q && last_part) begin
+      end else if (is_oper && !rd_d && last_part) begin
         ready = ~opw_valid_q;
-      end else if (is_rest && rd_q) begin
+      end else if (is_rest && rd_d) begin
         ready = restore_valid_q;
       end
     end
@@ -387,20 +491,34 @@ module rd68884_biu (
   // ==========================================================================
   // The cycle state machine
   // ==========================================================================
-  typedef enum logic [1:0] {
-    S_IDLE,
-    S_DECODE,
-    S_ACK
-  } cyc_e;
-
-  cyc_e state;
   logic ack_q;
   logic [3:0] lanes_q;
   logic [1:0] dsack_q;
 
-  // The access completes in the clock it is acknowledged.
-  logic take;
-  assign take = (state == S_DECODE) && (rd_q || ds_s) && ready;
+  // The cycle is over: the stale guard says so, or (same clock) START is no
+  // longer asserted at a rising edge.
+  logic cyc_end;
+  assign cyc_end = stale_s | ((BUS_SYNC != 0) & ~start_s);
+
+  // The access completes in the clock it is taken: from DECODE, once the BIU
+  // is ready and (asynchronous) DS is asserted on a write -- a write already
+  // acknowledged early, unconditionally (it was ready then and is still: see
+  // early_ack). Same clock, straight from IDLE: a read, or with one wait state
+  // a write too (its data has been driven since the edge entering S2).
+  logic take_idle, take;
+  assign take_idle = same_clk && (state == S_IDLE) && start_s && ready &&
+                     (rd_d || !zero_wait);
+  assign take = take_idle ||
+                ((state == S_DECODE) && !cyc_end && (rd_q || ds_s || same_clk) &&
+                 (ready || ack_q));
+
+  // zero_wait: a write is acknowledged when its START is first seen (E2) and
+  // taken a clock later (E4), its data driven for a clock by then. Ready at E2
+  // means ready at E4: the only write that can be refused is an operand write
+  // while opw_valid_q is set, and only the bus sets it; a violation is always
+  // ready. E2 and E4 are consecutive rising edges.
+  logic early_ack;
+  assign early_ack = zero_wait && (state == S_IDLE) && start_s && !rd_d && ready;
 
   assign stale_clr = (state == S_IDLE);
 
@@ -428,26 +546,26 @@ module rd68884_biu (
       if (violation && !pv_q) begin
         ev_pv = 1'b1;
       end else if (!violation && !pv_q) begin
-        ev_resp       = is_resp & rd_q;
-        ev_rsel       = touches_rsel & rd_q;
-        ev_save       = save_ok & is_save & rd_q & (first_part ? save_valid_q : hold_save_q);
-        ev_save_again = save_ok & is_save & rd_q & ~(first_part ? save_valid_q : hold_save_q);
-        ev_cmd        = (is_cmd | is_cond) & ~rd_q;
-        ev_opw        = is_oper & ~rd_q;
-        ev_opr        = is_oper & rd_q;
-        ev_rest_w     = is_rest & ~rd_q;
-        ev_rest_r     = is_rest & rd_q;
-        ev_iar        = is_iar & ~rd_q;
+        ev_resp       = is_resp & rd_d;
+        ev_rsel       = touches_rsel & rd_d;
+        ev_save       = save_ok & is_save & rd_d & (first_part ? save_valid_q : hold_save_q);
+        ev_save_again = save_ok & is_save & rd_d & ~(first_part ? save_valid_q : hold_save_q);
+        ev_cmd        = (is_cmd | is_cond) & ~rd_d;
+        ev_opw        = is_oper & ~rd_d;
+        ev_opr        = is_oper & rd_d;
+        ev_rest_w     = is_rest & ~rd_d;
+        ev_rest_r     = is_rest & rd_d;
+        ev_iar        = is_iar & ~rd_d;
       end
       // FPU 7.2.2: a control write is never illegal, and with a violation
       // pending it is the acknowledge that clears it. A save read and the
       // response read stay legal too (FPU 7.2.1, 7.2.3).
-      ev_abort = is_ctrl & ~rd_q;
+      ev_abort = is_ctrl & ~rd_d;
       if (pv_q) begin
-        ev_save       = save_ok & is_save & rd_q & (first_part ? save_valid_q : hold_save_q);
-        ev_save_again = save_ok & is_save & rd_q & ~(first_part ? save_valid_q : hold_save_q);
-        ev_rest_w     = is_rest & ~rd_q;
-        ev_iar        = is_iar & ~rd_q;
+        ev_save       = save_ok & is_save & rd_d & (first_part ? save_valid_q : hold_save_q);
+        ev_save_again = save_ok & is_save & rd_d & ~(first_part ? save_valid_q : hold_save_q);
+        ev_rest_w     = is_rest & ~rd_d;
+        ev_iar        = is_iar & ~rd_d;
       end
     end
   end
@@ -513,32 +631,39 @@ module rd68884_biu (
             size_n_q <= size_n_i;
             state    <= S_DECODE;
           end
-        end
-        S_DECODE: begin
-          if (stale_s) begin
-            state <= S_IDLE;                  // gone before it could be answered
-          end else if (take) begin
+          if (early_ack) begin
             ack_q   <= 1'b1;
             lanes_q <= lanes;
             dsack_q <= dsack_val;
-            d_o     <= rd_out;
-            if (first_part) begin
-              hold_q      <= rd_word;
-              hold_save_q <= save_valid_q;
-            end
-            if (!rd_q) begin
-              wstage_q <= wmerged;
-            end
-            state <= S_ACK;
+          end
+        end
+        S_DECODE: begin
+          if (cyc_end) begin
+            ack_q <= 1'b0;
+            state <= S_IDLE;                  // gone before it could be answered
           end
         end
         default: begin                        // S_ACK, until the cycle ends
-          if (stale_s) begin
+          if (cyc_end) begin
             ack_q <= 1'b0;
             state <= S_IDLE;
           end
         end
       endcase
+      if (take) begin
+        ack_q   <= 1'b1;
+        lanes_q <= lanes;
+        dsack_q <= dsack_val;
+        d_o     <= rd_out;
+        if (first_part) begin
+          hold_q      <= rd_word;
+          hold_save_q <= save_valid_q;
+        end
+        if (!rd_d) begin
+          wstage_q <= wmerged;
+        end
+        state <= S_ACK;
+      end
 
       // ---- what the completing access does ------------------------------
       // The sequencer's writes come first in the source and the bus events

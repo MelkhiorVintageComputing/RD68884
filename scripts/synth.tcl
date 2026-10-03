@@ -4,7 +4,12 @@
 
 # Vivado out-of-context synthesis.
 #
-#   vivado -mode batch -source scripts/synth.tcl -tclargs <build> <top> <part>
+#   vivado -mode batch -source scripts/synth.tcl -tclargs <build> <top> <part> \
+#          [<constraints> [NAME=VALUE ...]]
+#
+# The optional constraints file replaces scripts/rd68884.xdc, and each NAME=VALUE
+# sets a top-level parameter: the same-clock BIU is BUS_SYNC=1 with
+# build/rd68884_sync.xdc (doc/bus-timing.md).
 #
 # Out of context because this is a coprocessor core, not a board design: there are
 # no pads, no I/O buffers and no board constraints, and the numbers are about the
@@ -13,6 +18,9 @@
 set build [lindex $argv 0]
 set top   [lindex $argv 1]
 set part  [lindex $argv 2]
+set xdc   [expr {$argc > 3 ? [lindex $argv 3] : "scripts/rd68884.xdc"}]
+set gen   {}
+foreach g [lrange $argv 4 end] { lappend gen -generic $g }
 
 # A signal used before its declaration is only [Synth 8-6901], an *info* message.
 # Questa rejects the same thing outright, so make Vivado agree. [Synth 8-3332]
@@ -30,9 +38,9 @@ foreach f $files {
     }
 }
 
-read_xdc scripts/rd68884.xdc
+read_xdc $xdc
 
-synth_design -top $top -part $part -mode out_of_context
+synth_design -top $top -part $part -mode out_of_context {*}$gen
 
 write_checkpoint -force $build/${top}_synth.dcp
 report_utilization -file $build/${top}_synth_util.rpt

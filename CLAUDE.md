@@ -123,6 +123,8 @@ make lint-quartus / make quartus / make lint-questa
 
 `make help` lists every target.
 
+The BIU's front end is a build choice (doc/bus-timing.md): `BUS_SYNC=0` (the default) takes the bus as asynchronous; `BUS_SYNC=1` runs the core on the main processor's CLK, with `BUS_SYNC_WAIT=0` or `1` wait states. `lint`, `audit` and `sim` cover all three builds; `sys`, `synth`, `impl`, `quartus`, `lint-quartus`, `tme` and `sunos` build the one named, for example `make sys BUS_SYNC=1`. `make cycles` measures both.
+
 ## Tooling notes
 
 | Tool | Version / location |

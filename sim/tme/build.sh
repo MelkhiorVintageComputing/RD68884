@@ -36,10 +36,13 @@ fi
 
 # The core, as a static library behind a C interface.
 V=$B/vobj
-verilator --cc -O3 --top-module rd68021_tme_rd68884 --prefix Vrd68021_top \
+# BUS_SYNC=1 in the environment: the same-clock BIU, on the core's clock.
+GEN="-GBUS_SYNC=${BUS_SYNC:-0} -GBUS_SYNC_WAIT=${BUS_SYNC_WAIT:-0}"
+verilator --cc -O3 --top-module rd68021_tme_rd68884 --prefix Vrd68021_top $GEN \
   -Wno-fatal --Mdir $V -CFLAGS "-O2" $RD/rtl/rd68021.vlt $RD/sim/tme/public.vlt \
   "$@" $ROOT/sim/tme/rd68021_tme_rd68884.sv > $B/verilator.log 2>&1
 MDEF=-DRD_MH882
+[ "${BUS_SYNC:-0}" = 1 ] && MDEF="$MDEF -DRD_FPU_SAMECLK"
 make -s -C $V -f Vrd68021_top.mk -j8 > $B/vmake.log 2>&1
 VINC=$(verilator --getenv VERILATOR_ROOT)/include
 g++ -O2 $MDEF -c -I$V -I$VINC -I$VINC/vltstd -I$RD/sim/tme $ROOT/sim/tme/rd68021_model.cpp -o $V/rd68021_model.o

@@ -4,7 +4,11 @@
 
 # Quartus analysis and synthesis, and optionally the fit.
 #
-#   quartus_sh -t scripts/quartus.tcl <stage> <build> <top> <family> <part>
+#   quartus_sh -t scripts/quartus.tcl <stage> <build> <top> <family> <part> [NAME=VALUE ...]
+#
+# Each NAME=VALUE sets a top-level parameter (BUS_SYNC, BUS_SYNC_WAIT). The
+# ports are virtual pins, so the same-clock BIU's pin timing is Vivado's
+# business (scripts/rd68884_sync.xdc.in); here it is the logic.
 #
 # <stage> is "map" (analysis and synthesis, the front-end check) or "fit" (place and
 # route, for a second post-route frequency).
@@ -27,6 +31,7 @@ proc main {} {
     set top     [lindex $::quartus(args) 2]
     set family  [lindex $::quartus(args) 3]
     set part    [lindex $::quartus(args) 4]
+    set params  [lrange $::quartus(args) 5 end]
 
     set proj $build/$top
 
@@ -57,6 +62,12 @@ proc main {} {
     set_global_assignment -name SDC_FILE $sdc
     set_global_assignment -name VERILOG_INPUT_VERSION SYSTEMVERILOG_2005
     set_global_assignment -name NUM_PARALLEL_PROCESSORS 8
+    # The project is reopened from run to run, so the Makefile passes every
+    # parameter every time.
+    foreach p $params {
+        lassign [split $p =] name value
+        set_parameter -name $name $value
+    }
 
     set fp [open $rtlf r]
     foreach f [split [string trim [read $fp]] "\n"] {

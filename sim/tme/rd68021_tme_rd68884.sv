@@ -13,8 +13,14 @@
 // A0 strapped), an early chip select for CpID 1 decoded from FC = 7, A19-A16
 // = 2, A15-A13 = 1 (FPU 10.3), DSACK with pull-ups. RESET reaches the FPU
 // from the board and from the core's RESET instruction.
+//
+// BUS_SYNC = 1 is the same-clock BIU (doc/bus-timing.md): the FPU then runs on
+// the core's clock, and clk_fpu is not used.
 
-module rd68021_tme_rd68884 (
+module rd68021_tme_rd68884 #(
+    parameter int BUS_SYNC      = 0,
+    parameter int BUS_SYNC_WAIT = 0
+) (
     input  logic        clk,
     input  logic        clk_fpu,
     input  logic        rst_n,
@@ -89,8 +95,11 @@ module rd68021_tme_rd68884 (
       .halt_n_i (halt_n_i), .halt_n_o (halt_n_o), .halt_n_oe (halt_n_oe),
       .cdis_n_i (cdis_n_i));
 
-  rd68884_top fpu (
-      .clk (clk_fpu), .rst_n (rst_n),
+  logic fpu_clk;
+  assign fpu_clk = (BUS_SYNC != 0) ? clk : clk_fpu;
+
+  rd68884_top #(.BUS_SYNC (BUS_SYNC), .BUS_SYNC_WAIT (BUS_SYNC_WAIT)) fpu (
+      .clk (fpu_clk), .rst_n (rst_n),
       .reset_n_i (reset_n_i && !(reset_n_oe && !reset_n_o)),
       .cs_n_i (cs_n), .as_n_i (as_n_o), .ds_n_i (ds_n_o), .rw_i (rw_o),
       .size_n_i (1'b1), .a_i ({a_o[4:1], 1'b1}),

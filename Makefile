@@ -50,7 +50,7 @@ IVFLAGS := -g2012 -Wall -Wno-timescale
 .PHONY: all help dirs lint lint-source lint-iverilog lint-verilator lint-yosys \
         lint-quartus lint-questa synth impl quartus audit check print-rtl clean \
         oracles model-test testfloat testfloat-full iss-testfloat iss-arith iss-trans trans-accuracy sim ucode ucode-check \
-        iss-test rd68021 sys cycles tme sunos
+        iss-test rd68021 sys cycles tme sunos FORCE
 
 all: lint
 
@@ -101,6 +101,37 @@ dirs:
 lint: lint-source lint-iverilog lint-verilator lint-yosys
 	@echo "PASS: lint"
 
+# The BIU's front end (doc/bus-timing.md): BUS_SYNC=0, the default, takes the
+# bus as asynchronous; BUS_SYNC=1 runs on the main processor's CLK, with
+# BUS_SYNC_WAIT wait states (0 or 1). lint, audit and sim cover all three
+# builds whatever these say; the other targets build the one they name.
+BUS_SYNC      ?= 0
+BUS_SYNC_WAIT ?= 0
+BUILDS        := 0:0 1:0 1:1
+GENERICS      := BUS_SYNC=$(BUS_SYNC) BUS_SYNC_WAIT=$(BUS_SYNC_WAIT)
+
+# The same-clock BIU's pin timing, against the main processor's clock: its
+# period, how long after a falling edge the strobes change (UM specs 9 and 12;
+# a real MC68020 at 16.67 MHz takes up to 30 ns, RD68021 in the same FPGA only
+# its routing), after a rising edge the address and the write data (UM specs 6
+# and 23), and the setup DSACK and read data need (UM specs 47A and 27).
+SYNC_CLK_NS   ?= 60
+SYNC_IN_NS    ?= 30
+SYNC_AIN_NS   ?= 30
+SYNC_DIN_NS   ?= 30
+SYNC_SETUP_NS ?= 5
+XDC := $(if $(filter 1,$(BUS_SYNC)),$(CURDIR)/$(BUILD)/rd68884_sync.xdc,$(CURDIR)/scripts/rd68884.xdc)
+
+$(BUILD)/rd68884_sync.xdc: scripts/rd68884_sync.xdc.in FORCE | dirs
+	@rank='# (zero wait: no rank)'; \
+	 amc='# (zero wait: they are used on the edge entering S2, one clock)'; \
+	 [ "$(BUS_SYNC_WAIT)" = 1 ] && rank='set_false_path -from [get_ports {cs_n_i as_n_i ds_n_i rw_i}] -to [get_cells -hier -filter {NAME =~ *rank_q_reg*}]' \
+	   && amc='# One wait: nothing uses them before the edge entering S4, two clocks.\nset_multicycle_path -setup 2 -from [get_ports {a_i[*] rw_i size_n_i}]\nset_multicycle_path -hold 1 -from [get_ports {a_i[*] rw_i size_n_i}]'; \
+	 sed -e 's/@CLK@/$(SYNC_CLK_NS)/g' -e "s/@HALF@/$$(echo '$(SYNC_CLK_NS)' | awk '{printf "%.3f", $$1 / 2}')/g" \
+	     -e 's/@IN@/$(SYNC_IN_NS)/g' -e 's/@AIN@/$(SYNC_AIN_NS)/g' -e 's/@DIN@/$(SYNC_DIN_NS)/g' \
+	     -e 's/@SETUP@/$(SYNC_SETUP_NS)/g' -e "s|@RANK@|$$rank|" -e "s|@AMC@|$$amc|" $< > $@
+FORCE:
+
 # The two portability rules the three free front-ends do not enforce and the
 # three vendor ones do: declaration before use, and no package-scoped name in a
 # port connection (doc/coding-standard.md).
@@ -116,35 +147,45 @@ lint-source:
 NOTES := ': sorry: .*\(ignored\|all bits will be included\)\.$$'
 
 lint-iverilog: dirs
-	@iverilog $(IVFLAGS) -o $(BUILD)/$(TOP).vvp -s $(TOP) $(RTL) \
-	    > $(BUILD)/iverilog.log 2>&1 \
-	  || { grep -v $(NOTES) $(BUILD)/iverilog.log; exit 1; }
+	@for b in $(BUILDS); do \
+	  iverilog $(IVFLAGS) -P $(TOP).BUS_SYNC=$${b%:*} -P $(TOP).BUS_SYNC_WAIT=$${b#*:} \
+	    -o $(BUILD)/$(TOP).vvp -s $(TOP) $(RTL) > $(BUILD)/iverilog.log 2>&1 \
+	  || { echo "BUS_SYNC:WAIT $$b"; grep -v $(NOTES) $(BUILD)/iverilog.log; exit 1; }; \
+	done
 	@echo "  iverilog: ok"
 
 lint-verilator: dirs
-	@verilator --lint-only -Wall --top-module $(TOP) $(VLT) $(RTL) \
-	    > $(BUILD)/verilator.log 2>&1 \
-	  || { grep -v '^- V e r i l a t i o n\|^- Verilator:' $(BUILD)/verilator.log; exit 1; }
+	@for b in $(BUILDS); do \
+	  verilator --lint-only -Wall --top-module $(TOP) -GBUS_SYNC=$${b%:*} -GBUS_SYNC_WAIT=$${b#*:} \
+	    $(VLT) $(RTL) > $(BUILD)/verilator.log 2>&1 \
+	  || { echo "BUS_SYNC:WAIT $$b"; grep -v '^- V e r i l a t i o n\|^- Verilator:' $(BUILD)/verilator.log; exit 1; }; \
+	done
 	@echo "  verilator: ok"
 
 # The full synth pass, so anything unsynthesisable is caught here rather than in
 # Vivado. yosys returns 0 on a warning, and two of its warnings are defects: a
 # register driven from two processes, and an inferred latch. Both are gates here.
 lint-yosys: dirs
-	@set -o pipefail; yosys -p "read_verilog -sv $(RTL); synth -top $(TOP); \
+	@set -o pipefail; for b in $(BUILDS); do \
+	  yosys -p "read_verilog -sv $(RTL); \
+	    chparam -set BUS_SYNC $${b%:*} -set BUS_SYNC_WAIT $${b#*:} $(TOP); synth -top $(TOP); \
 	    write_verilog $(BUILD)/$(TOP)_yosys.v" > $(BUILD)/yosys.log 2>&1 \
-	  || { tail -40 $(BUILD)/yosys.log; exit 1; }
-	@if grep -q 'multiple conflicting drivers\|Warning: Identifier .* is implicitly declared\|inferring latch' $(BUILD)/yosys.log; then \
-	    echo "FAIL: yosys"; \
+	  || { echo "BUS_SYNC:WAIT $$b"; tail -40 $(BUILD)/yosys.log; exit 1; }; \
+	  if grep -q 'multiple conflicting drivers\|Warning: Identifier .* is implicitly declared\|inferring latch' $(BUILD)/yosys.log; then \
+	    echo "FAIL: yosys, BUS_SYNC:WAIT $$b"; \
 	    grep -n 'multiple conflicting drivers\|implicitly declared\|inferring latch' $(BUILD)/yosys.log | head -20; \
-	    exit 1; fi
+	    exit 1; fi; \
+	done
 	@echo "  yosys: ok"
 
 # ---------------------------------------------------------------------------
 # The reset rule
 # ---------------------------------------------------------------------------
 audit: dirs
-	@python3 tools/reset_audit.py --top $(TOP) --build $(BUILD) $(RTL)
+	@for b in $(BUILDS); do \
+	  python3 tools/reset_audit.py --top $(TOP) --build $(BUILD) \
+	    --param BUS_SYNC=$${b%:*} --param BUS_SYNC_WAIT=$${b#*:} $(RTL) || exit 1; \
+	done
 
 # ---------------------------------------------------------------------------
 # Reference models -- M2
@@ -222,18 +263,20 @@ iss-arith: ucode-check
 TBS := $(filter-out sys_tb,$(patsubst sim/tb/%.sv,%,$(wildcard sim/tb/*_tb.sv)))
 
 sim: dirs
-	@ok=1; for tb in $(TBS); do \
-	  iverilog $(IVFLAGS) -I sim/tb -o $(BUILD)/$$tb.vvp -s $$tb $(RTL) sim/tb/$$tb.sv \
-	    > $(BUILD)/$$tb.clog 2>&1 || { grep -v $(NOTES) $(BUILD)/$$tb.clog; ok=0; continue; }; \
-	  vvp $(BUILD)/$$tb.vvp > $(BUILD)/$$tb.log 2>&1; \
-	  if grep -q '^FAIL' $(BUILD)/$$tb.log; then \
-	    grep '^FAIL' $(BUILD)/$$tb.log | head -20; ok=0; \
-	  elif ! grep -q '^PASS' $(BUILD)/$$tb.log; then \
-	    echo "FAIL: $$tb reported no PASS"; tail -20 $(BUILD)/$$tb.log; ok=0; \
+	@ok=1; for tb in $(TBS); do for b in $(BUILDS); do \
+	  def=""; [ $${b%:*} = 1 ] && def="-DBIU_SYNC -DBIU_SYNC_WAIT=$${b#*:}"; \
+	  l=$(BUILD)/$$tb-$${b%:*}$${b#*:}; \
+	  iverilog $(IVFLAGS) $$def -I sim/tb -o $$l.vvp -s $$tb $(RTL) sim/tb/$$tb.sv \
+	    > $$l.clog 2>&1 || { grep -v $(NOTES) $$l.clog; ok=0; continue; }; \
+	  vvp $$l.vvp > $$l.log 2>&1; \
+	  if grep -q '^FAIL' $$l.log; then \
+	    grep '^FAIL' $$l.log | head -20; ok=0; \
+	  elif ! grep -q '^PASS' $$l.log; then \
+	    echo "FAIL: $$tb reported no PASS"; tail -20 $$l.log; ok=0; \
 	  else \
-	    echo "  $$(grep -E '^PASS' $(BUILD)/$$tb.log | head -1)"; \
+	    echo "  $$(grep -E '^PASS' $$l.log | head -1), BUS_SYNC:WAIT $$b"; \
 	  fi; \
-	done; test $$ok -eq 1 && echo "PASS: sim"
+	done; done; test $$ok -eq 1 && echo "PASS: sim"
 
 # ---------------------------------------------------------------------------
 # The system -- M4
@@ -258,6 +301,8 @@ $(RDSRC)/.exported:
 	@echo "  rd68021: $(RD68021_REV) exported to $(RDSRC)"
 rd68021: $(RDSRC)/.exported
 CROSS   := m68k-linux-gnu-
+# sys_tb with the BIU this build names: the FPU on its own clock, or on the CPU's.
+SYSDEF := $(if $(filter 1,$(BUS_SYNC)),-DSYS_BUS_SYNC -DSYS_BUS_SYNC_WAIT=$(BUS_SYNC_WAIT))
 SYSPROGS  ?= fpu_m4 fpu_m5 fpu_m6 fpu_m7 fpu_m8 fpu fparith fparith-dbl
 SYS_PORTS ?= 32 16 8
 
@@ -317,7 +362,7 @@ $(BUILD)/programs/%.hex: sim/programs/%.S sim/programs/flat.ld | dirs
 sys: ucode-check rd68021 $(patsubst %,$(BUILD)/programs/%.hex,$(SYSPROGS))
 	@rd="$$(cd $(RDSRC) && $(MAKE) -s print-rtl | sed 's#\(\S*\)#$(RDSRC)/\1#g')"; \
 	ok=1; for port in $(SYS_PORTS); do \
-	  iverilog $(IVFLAGS) -DSYS_PORT=$$port -o $(BUILD)/sys_tb_$$port.vvp -s sys_tb \
+	  iverilog $(IVFLAGS) -DSYS_PORT=$$port $(SYSDEF) -o $(BUILD)/sys_tb_$$port.vvp -s sys_tb \
 	    $(RTL) $$rd $(RDSRC)/sim/models/rd68021_slave.sv sim/tb/sys_tb.sv \
 	    > $(BUILD)/sys_tb_$$port.clog 2>&1 || { grep -v $(NOTES) $(BUILD)/sys_tb_$$port.clog | head; exit 1; }; \
 	  for p in $(SYSPROGS); do \
@@ -345,12 +390,15 @@ sys: ucode-check rd68021 $(patsubst %,$(BUILD)/programs/%.hex,$(SYSPROGS))
 # Clock counts against FPU section 8 -- doc/timing-divergences.md
 #
 # tools/cycles.py writes a program that times every instruction with sys_tb's
-# clock count (32-bit port), and it runs twice: at the design's clocks (the
-# FPU's core three times the bus clock) and with the FPU's core thirty times
-# as fast, where what is left is the main processor and the protocol. Every
-# row's count is frozen in tools/cycles.frozen; a change either way fails
-# until it is looked at and frozen again (FREEZE=1). The table in the doc is
-# regenerated from the measurement.
+# clock count (32-bit port), and it runs four times: at the design's clocks
+# (the FPU's core three times the bus clock), with the FPU's core thirty times
+# as fast (what is left is the main processor and the protocol), with the
+# same-clock BIU on the CPU's clock (BUS_SYNC=1, no wait states), and with the
+# asynchronous BIU at the CPU's clock, for comparison. The design's counts and
+# the same-clock ones are frozen in tools/cycles.frozen and
+# tools/cycles-sync.frozen; a change either way fails until it is looked at and
+# frozen again (FREEZE=1). The tables in the doc are regenerated from the
+# measurement.
 # ---------------------------------------------------------------------------
 cycles: ucode-check rd68021
 	@mkdir -p $(BUILD)/programs
@@ -359,15 +407,19 @@ cycles: ucode-check rd68021
 	@$(CROSS)ld --no-warn-rwx-segments -T sim/programs/flat.ld -o $(BUILD)/programs/cycles.elf $(BUILD)/programs/cycles.o
 	@$(CROSS)objcopy -O verilog --verilog-data-width=1 $(BUILD)/programs/cycles.elf $(BUILD)/programs/cycles.hex
 	@rd="$$(cd $(RDSRC) && $(MAKE) -s print-rtl | sed 's#\(\S*\)#$(RDSRC)/\1#g')"; \
-	  iverilog $(IVFLAGS) -DSYS_PORT=32 -o $(BUILD)/sys_tb_32.vvp -s sys_tb \
-	    $(RTL) $$rd $(RDSRC)/sim/models/rd68021_slave.sv sim/tb/sys_tb.sv \
-	    > $(BUILD)/sys_tb_32.clog 2>&1 || { grep -v $(NOTES) $(BUILD)/sys_tb_32.clog | head; exit 1; }
-	@for r in 20:cycles 2:cycles-fast; do \
-	  vvp $(BUILD)/sys_tb_32.vvp +image=$(BUILD)/programs/cycles.hex +limit=4000000 \
-	    +fpu_ns=$${r%%:*} +dump=$(BUILD)/$${r#*:}.dump > $(BUILD)/$${r#*:}.log 2>&1; \
-	  grep -q '^PASS' $(BUILD)/$${r#*:}.log || { tail -3 $(BUILD)/$${r#*:}.log; exit 1; }; \
+	  for v in a: s:-DSYS_BUS_SYNC; do \
+	    iverilog $(IVFLAGS) -DSYS_PORT=32 $${v#*:} -o $(BUILD)/cycles_tb_$${v%%:*}.vvp -s sys_tb \
+	      $(RTL) $$rd $(RDSRC)/sim/models/rd68021_slave.sv sim/tb/sys_tb.sv \
+	      > $(BUILD)/cycles_tb.clog 2>&1 || { grep -v $(NOTES) $(BUILD)/cycles_tb.clog | head; exit 1; }; \
+	  done
+	@for r in a:20:cycles a:2:cycles-fast a:60:cycles-slow s:60:cycles-sync; do \
+	  set -- $$(echo $$r | tr : ' '); \
+	  vvp $(BUILD)/cycles_tb_$$1.vvp +image=$(BUILD)/programs/cycles.hex +limit=4000000 \
+	    +fpu_ns=$$2 +dump=$(BUILD)/$$3.dump > $(BUILD)/$$3.log 2>&1; \
+	  grep -q '^PASS' $(BUILD)/$$3.log || { tail -3 $(BUILD)/$$3.log; exit 1; }; \
 	done
 	@$(PYENV) python3 tools/cycles.py check $(BUILD)/cycles.dump $(BUILD)/cycles-fast.dump \
+	  --sync $(BUILD)/cycles-sync.dump --slow $(BUILD)/cycles-slow.dump \
 	  --doc doc/timing-divergences.md $(if $(FREEZE),--freeze)
 
 # ---------------------------------------------------------------------------
@@ -398,6 +450,7 @@ STAMPS    := sed -E 's/[A-Z][a-z]{2} [A-Z][a-z]{2} [ 0-9][0-9] [0-9:]{8} [A-Z]+ 
 tme: dirs rd68021
 	@test -d $(SUN3SRC)/tme-0.8_up || { echo "FAIL: no $(SUN3SRC): git submodule update --init"; exit 1; }
 	@rd="$$(cd $(RDSRC) && $(MAKE) -s print-rtl | sed 's#\(\S*\)#$(CURDIR)/$(RDSRC)/\1#g')"; \
+	  BUS_SYNC=$(BUS_SYNC) BUS_SYNC_WAIT=$(BUS_SYNC_WAIT) TME_BUILD=$(CURDIR)/$(TMEB) \
 	  sim/tme/build.sh $(CURDIR) $(CURDIR)/$(RDSRC) $$rd $(addprefix $(CURDIR)/,$(RTL)) $(CURDIR)/$(VLT)
 
 sunos: tme
@@ -447,18 +500,18 @@ check: ucode-check lint audit model-test iss-test sim
 # ---------------------------------------------------------------------------
 # Vendor front-ends. Each has its own target and none is in `check`.
 # ---------------------------------------------------------------------------
-synth: dirs
+synth: dirs $(if $(filter 1,$(BUS_SYNC)),$(BUILD)/rd68884_sync.xdc)
 	@printf '%s\n' $(RTL) > $(BUILD)/rtl.f
 	@set -o pipefail; scripts/vivado.sh -mode batch -nojournal -nolog \
-	    -source scripts/synth.tcl -tclargs $(BUILD) $(TOP) $(XPART) \
+	    -source scripts/synth.tcl -tclargs $(BUILD) $(TOP) $(XPART) $(XDC) $(GENERICS) \
 	    > $(BUILD)/synth.log 2>&1 \
 	  || { grep -E '^(SYNTH|ERROR|CRITICAL WARNING)' $(BUILD)/synth.log; exit 1; }
 	@grep -E '^(SYNTH|CRITICAL WARNING)' $(BUILD)/synth.log
 
-impl: dirs
+impl: dirs $(if $(filter 1,$(BUS_SYNC)),$(BUILD)/rd68884_sync.xdc)
 	@printf '%s\n' $(addprefix $(CURDIR)/,$(RTL)) > $(BUILD)/rtl.f
 	@cd $(BUILD) && $(CURDIR)/scripts/vivado.sh -mode batch -nojournal -nolog \
-	    -source $(CURDIR)/scripts/impl.tcl -tclargs $(XPART) $(TOP) $(CURDIR) \
+	    -source $(CURDIR)/scripts/impl.tcl -tclargs $(XPART) $(TOP) $(CURDIR) $(XDC) $(GENERICS) \
 	    > impl.log 2>&1; rc=$$?; \
 	  grep -E '^(RD68884|ERROR|CRITICAL WARNING)' impl.log; exit $$rc
 
@@ -468,7 +521,7 @@ impl: dirs
 lint-quartus: dirs
 	@printf '%s\n' $(RTL) > $(BUILD)/rtl.f
 	@set -o pipefail; scripts/altera.sh quartus_sh -t scripts/quartus.tcl map \
-	    $(BUILD) $(TOP) $(AFAMILY) $(APART) > $(BUILD)/quartus_map.log 2>&1 \
+	    $(BUILD) $(TOP) $(AFAMILY) $(APART) $(GENERICS) > $(BUILD)/quartus_map.log 2>&1 \
 	  || { grep -E '^QUARTUS|Error' $(BUILD)/quartus_map.log | head; exit 1; }
 	@if grep -q 'Implicit Net warning\|Warning (10236)' $(BUILD)/quartus_map.log; then \
 	    echo "FAIL: quartus found an implicit net -- the netlist does not match the source"; \
@@ -481,7 +534,7 @@ quartus: dirs
 	@mkdir -p $(QBUILD)
 	@printf '%s\n' $(RTL) > $(QBUILD)/rtl.f
 	@set -o pipefail; scripts/altera.sh quartus_sh -t scripts/quartus.tcl fit \
-	    $(QBUILD) $(TOP) $(AFAMILY) $(APART) \
+	    $(QBUILD) $(TOP) $(AFAMILY) $(APART) $(GENERICS) \
 	    > $(QBUILD)/fit.log 2>&1 || { grep -E '^QUARTUS|Error' $(QBUILD)/fit.log | head; exit 1; }
 	@if grep -q 'Warning (10236)' $(QBUILD)/fit.log; then \
 	    echo "FAIL: quartus found an implicit net"; exit 1; fi
@@ -490,7 +543,10 @@ quartus: dirs
 	    $(QBUILD)/quartus_out/$(TOP).fit.summary
 
 lint-questa: dirs
-	@scripts/questa.sh $(BUILD) $(TOP) $(RTL)
+	@for b in $(BUILDS); do \
+	  QUESTA_G="-GBUS_SYNC=$${b%:*} -GBUS_SYNC_WAIT=$${b#*:}" scripts/questa.sh $(BUILD) $(TOP) $(RTL) \
+	    || { echo "BUS_SYNC:WAIT $$b"; exit 1; }; \
+	done
 	@echo "  questa: ok"
 
 print-rtl:

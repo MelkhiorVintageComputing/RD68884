@@ -54,3 +54,19 @@ The element's report for the run under test:
 | Faults | 5623 |
 
 The saves and restores are SunOS's context switches, made while the program runs. The whole target takes about a quarter of an hour, most of it in the core.
+
+## With the same-clock BIU
+
+`make sunos BUS_SYNC=1` runs the same machine with the same-clock BIU, RD68884 on the core's own clock (`doc/bus-timing.md`). It passes the same way: the same 82 lines.
+
+Over the run, RD68884 answered:
+
+| | Count |
+|---|---|
+| Coprocessor-interface accesses | 9468 |
+| General instructions | 860 |
+| Conditional instructions | 57 |
+| FSAVEs | 1264 |
+| FRESTOREs | 633 |
+
+The extra accesses are come-again polls. On the same clock a response read can arrive before the sequencer has answered, and is told to come again: `doc/timing-divergences.md`, "One clock for everything".

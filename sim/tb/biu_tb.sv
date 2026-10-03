@@ -19,8 +19,30 @@
 // Every test runs for each port width and for several bus/core clock pairs,
 // with the core clock from three times the bus clock down to equal to it.
 // The run ends with PASS or FAIL; a missing PASS is a failure (Makefile).
+//
+// Built with BIU_SYNC defined (and BIU_SYNC_WAIT 0 or 1), the BIU is the
+// same-clock one (doc/bus-timing.md) and the bus model runs on the BIU's own
+// clock with the MC68020's edges: AS (and DS, reading) a little after the
+// falling edge entering S1, write data from the rising edge entering S2, DS
+// (writing) after the falling edge entering S3, DSACK sampled on that falling
+// edge and on each one entering a wait state, read data latched on the
+// falling edge entering S5 -- RD68021's state ruler. Every cycle is then held
+// to an exact count: its wait states are the rising edges, from the one
+// entering S2, before the BIU took or acknowledged it, and on each of those the
+// BIU must have been unable to (not ready, or START not yet seen). With one
+// wait state the run ends with strobes too late for the edge entering S2,
+// which must cost exactly one more.
 
 `timescale 1ns / 1ps
+
+`ifdef BIU_SYNC
+`ifndef BIU_SYNC_WAIT
+`define BIU_SYNC_WAIT 0
+`endif
+`define BCLK clk
+`else
+`define BCLK bclk
+`endif
 
 module biu_tb;
 
@@ -68,7 +90,11 @@ module biu_tb;
   logic [15:0] cmd_word, restore_word;
   logic [31:0] opw_data, fpiar;
 
+`ifdef BIU_SYNC
+  rd68884_biu #(.BUS_SYNC(1), .BUS_SYNC_WAIT(`BIU_SYNC_WAIT)) dut (
+`else
   rd68884_biu dut (
+`endif
       .clk(clk), .rst_n(rst_n), .reset_n_i(reset_n),
       .cs_n_i(cs_n), .as_n_i(as_n), .ds_n_i(ds_n), .rw_i(rw),
       .size_n_i(size_n), .a_i(fpu_a), .d_i(fpu_d_i), .d_o(fpu_d_o),
@@ -204,7 +230,7 @@ module biu_tb;
 
   // One bus cycle. siz is the MC68020's SIZ (1-4 bytes still to go), op the
   // remaining operand right-aligned (OP3 = its least significant byte).
-  task automatic cycle(input logic [4:0] a, input bit read, input integer siz,
+  task automatic cycle_async(input logic [4:0] a, input bit read, input integer siz,
                        input logic [31:0] op, output logic [31:0] bus);
     logic [7:0] o0, o1, o2, o3;
     integer waits;
@@ -256,6 +282,110 @@ module biu_tb;
     cs_n     <= 1'b1;
     mpu_d_oe <= 1'b0;
     rw       <= 1'b1;
+  endtask
+
+`ifdef BIU_SYNC
+  // The same-clock cycle: see the header. strobe_ns is how long after a
+  // falling edge the MC68020 changes AS and DS (UM specs 9, 12), data_ns how
+  // long after the rising edge entering S2 its write data is valid.
+  real strobe_ns = 7.0;
+  real data_ns   = 5.0;
+  integer sync_cycles = 0, sync_waits = 0;
+
+  task automatic cycle_sync(input logic [4:0] a, input bit read, input integer siz,
+                            input logic [31:0] op, output logic [31:0] bus);
+    logic [7:0] o0, o1, o2, o3;
+    logic [31:0] wd;
+    integer waits, edge_n, acked;
+    bit sampled;
+    o3 = op[7:0]; o2 = op[15:8]; o1 = op[23:16]; o0 = op[31:24];
+    case (siz)                                        // UM table 5-5
+      1: wd = {o3, o3, o3, o3};
+      2: wd = a[0] ? {o2, o2, o3, o2} : {o2, o3, o2, o3};
+      3: case (a[1:0])
+           2'b00: wd = {o1, o2, o3, o0};
+           2'b01: wd = {o1, o1, o2, o3};
+           2'b10: wd = {o1, o2, o1, o2};
+           default: wd = {o1, o1, o2, o1};
+         endcase
+      default: case (a[1:0])
+           2'b00: wd = {o0, o1, o2, o3};
+           2'b01: wd = {o0, o0, o1, o2};
+           2'b10: wd = {o0, o1, o0, o1};
+           default: wd = {o0, o0, o1, o0};
+         endcase
+    endcase
+    @(posedge clk);                                   // entering S0
+    mpu_a <= a;
+    rw    <= read;
+    cs_n  <= 1'b0;                                    // early chip select
+    @(negedge clk);                                   // entering S1
+    // Intra-assignment delays: the strobes change strobe_ns after the edge
+    // while the model goes on counting edges, even when that is past the next.
+    as_n <= #(strobe_ns) 1'b0;
+    if (read) ds_n <= #(strobe_ns) 1'b0;
+    // The rising edges from the one entering S2, counted by edge_n. The BIU's
+    // combinational take, early_ack and ready are read here, before this
+    // edge's register updates (nonblocking) have happened.
+    edge_n  = 0;
+    acked   = -1;
+    waits   = 0;
+    sampled = 0;
+    while (!sampled) begin
+      @(posedge clk);                                 // entering S2, S4 or a WH
+      if (acked < 0) begin
+        if (dut.take || dut.early_ack) begin
+          acked = edge_n;
+        end else if (edge_n >= `BIU_SYNC_WAIT && dut.ready && dut.start_s) begin
+          // A write too: zero_wait acknowledges it before DS (early_ack).
+          check(0, $sformatf("$%02h: not taken at rising edge %0d though ready", a, edge_n));
+        end
+      end
+      edge_n++;
+      if (edge_n == 1 && !read) begin
+        mpu_d_o  <= #(data_ns) wd;
+        mpu_d_oe <= #(data_ns) 1'b1;
+      end
+      @(negedge clk);                                 // entering S3 or a WL
+      if (dsack_bus != 2'b11) begin
+        sampled = 1;
+      end else begin
+        waits++;
+        if (waits > max_wait) begin
+          check(0, $sformatf("no DSACK at $%02h", a));
+          sampled = 1;
+        end
+      end
+      if (!read && edge_n == 1) begin
+        ds_n <= #(strobe_ns) 1'b0;
+      end
+    end
+    last_dsack = dsack_bus;
+    check(acked >= 0 && waits == acked,
+          $sformatf("$%02h: %0d wait states, acknowledged at rising edge %0d", a, waits, acked));
+    sync_cycles++;
+    sync_waits += waits;
+    last_waits = waits;
+    if (waits > access_maxwait) access_maxwait = waits;
+    @(posedge clk);                                   // entering S4
+    @(negedge clk);                                   // entering S5: data latched
+    bus = mpu_d_i;
+    as_n <= #(strobe_ns) 1'b1;
+    ds_n <= #(strobe_ns) 1'b1;
+    @(posedge clk);                                   // entering the next S0
+    cs_n     <= 1'b1;
+    mpu_d_oe <= 1'b0;
+    rw       <= 1'b1;
+  endtask
+`endif
+
+  task automatic cycle(input logic [4:0] a, input bit read, input integer siz,
+                       input logic [31:0] op, output logic [31:0] bus);
+`ifdef BIU_SYNC
+    cycle_sync(a, read, siz, op, bus);
+`else
+    cycle_async(a, read, siz, op, bus);
+`endif
   endtask
 
   // A whole operand of n bytes at a, with dynamic bus sizing (UM 5.2.2).
@@ -371,7 +501,7 @@ module biu_tb;
   endtask
 
   task automatic idle(input integer n);
-    repeat (n) @(posedge bclk);
+    repeat (n) @(posedge `BCLK);
   endtask
 
   // ==========================================================================
@@ -615,12 +745,12 @@ module biu_tb;
   task automatic t_arch_reset();
     where = "reset";
     seq_resp(16'h9504, 1, E_OPW);
-    @(negedge bclk);
+    @(negedge `BCLK);
     reset_n = 1'b0;
-    repeat (4) @(negedge bclk);
+    repeat (4) @(negedge `BCLK);
     check(arch_reset, "architectural reset seen");
     reset_n = 1'b1;
-    repeat (4) @(negedge bclk);
+    repeat (4) @(negedge `BCLK);
     rd_check(5'h00, 2, 32'h0802, "idle after RESET");
     check(fpiar == 0, "FPIAR cleared");
   endtask
@@ -708,14 +838,37 @@ module biu_tb;
     bus_of = (c == 0) ? 60.0 : (c == 1) ? 50.0 : (c == 2) ? 39.7 : (c == 3) ? 30.0 : 60.0;
   endfunction
 
+`ifdef BIU_SYNC
+  // One clock: the MC68020's at 16.67, 20, 25 and 33.33 MHz. The strobes
+  // change a quarter period after a falling edge, the write data a sixth after
+  // a rising one. With one wait state, a fifth run at 16.67 MHz has the
+  // strobes 0.7 of a period after the falling edge: past the rising edge.
+  localparam int NCLK = (`BIU_SYNC_WAIT != 0) ? 5 : 4;
+  function automatic real sync_of(input integer c);
+    sync_of = (c == 0) ? 60.0 : (c == 1) ? 50.0 : (c == 2) ? 40.0 : (c == 3) ? 30.0 : 60.0;
+  endfunction
+`else
+  localparam int NCLK = 5;
+`endif
+
 
   initial begin
-    for (int c = 0; c < 5; c++) begin
+    for (int c = 0; c < NCLK; c++) begin
       for (int p = 0; p < 3; p++) begin
+`ifdef BIU_SYNC
+        core_ns   = sync_of(c);
+        bus_ns    = core_ns;
+        strobe_ns = (c == 4) ? core_ns * 0.7 : core_ns / 4.0;
+        data_ns   = core_ns / 6.0;
+        port      = (p == 0) ? 32 : (p == 1) ? 16 : 8;
+        $display("biu_tb: port %0d bits, one clock %.1f ns, strobes %.1f ns late, BUS_SYNC_WAIT %0d",
+                 port, core_ns, strobe_ns, `BIU_SYNC_WAIT);
+`else
         core_ns = core_of(c);
         bus_ns  = bus_of(c);
         port    = (p == 0) ? 32 : (p == 1) ? 16 : 8;
         $display("biu_tb: port %0d bits, core %.1f ns, bus %.1f ns", port, core_ns, bus_ns);
+`endif
         do_reset();
         t_idle_and_reserved();
         t_command_and_oneshot();
@@ -731,6 +884,9 @@ module biu_tb;
         t_arch_reset();
       end
     end
+`ifdef BIU_SYNC
+    $display("biu_tb: %0d same-clock cycles, %0d wait states in all", sync_cycles, sync_waits);
+`endif
     if (errors == 0) $display("PASS: biu_tb, %0d checks", checks);
     else             $display("FAIL: biu_tb, %0d of %0d checks failed", errors, checks);
     $finish;
