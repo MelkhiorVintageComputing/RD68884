@@ -11,7 +11,14 @@ On each machine `drive.sh` logs in as root and writes a C program with `echo`. I
 
 ## How
 
-**RD68021's revision.** RD68021's checkout belongs to that project and moves. `make sys`, `make tme` and `make sunos` therefore use one pinned revision, `RD68021_REV` (`6d91ae5`). `make rd68021` exports it with `git archive`, which only reads the repository, to `build/rd68021-<rev>`. That revision is RD68021's `mh882_experiment` branch: master's RTL, plus the TME element's `fpu mh882` mode, which is what lets an RTL FPU inside the model answer the coprocessor interface. Master's element has only `fpu m68881`, a C front end on TME's arithmetic.
+**RD68021's revisions.** RD68021's checkout belongs to that project and moves, so the system targets use pinned revisions. `make rd68021` exports them with `git archive`, which only reads the repository, to `build/rd68021-<rev>`.
+
+| Pin | Revision | Used for |
+|---|---|---|
+| `RD68021_REV` | `dda5ee6`, its master | The core's RTL, the slave model and the SunOS scripts |
+| `RD68021_TME_REV` | `6d91ae5`, its `mh882_experiment` branch | The TME element's sources |
+
+The element pin is needed because only that branch's element has the `fpu mh882` mode, which lets an RTL FPU inside the model answer the coprocessor interface. Master's element has only `fpu m68881`, a C front end on TME's arithmetic. The element's C sources and the model's interface are the same on both, so the newer core builds with the older element.
 
 It follows RD68021's `make sunos-mh882`, which does the same with the mh882 MC68882. Its machinery is documented in RD68021's `doc/sun3.md`.
 
@@ -44,14 +51,14 @@ The element's report for the run under test:
 
 | Count | Value |
 |---|---|
-| Coprocessor-interface accesses | 6849 |
-| General instructions | 852 |
+| Coprocessor-interface accesses | 6905 |
+| General instructions | 856 |
 | Conditional instructions | 57 |
-| FSAVEs | 1250 |
-| FRESTOREs | 626 |
-| Core clocks | 1.86 × 10⁹ |
+| FSAVEs | 1238 |
+| FRESTOREs | 620 |
+| Core clocks | 1.80 × 10⁹ |
 | Bus cycles | 2.24 × 10⁸ |
-| Faults | 5623 |
+| Faults | 5632 |
 
 The saves and restores are SunOS's context switches, made while the program runs. The whole target takes about a quarter of an hour, most of it in the core.
 
@@ -63,11 +70,11 @@ Over the run, RD68884 answered:
 
 | | Count |
 |---|---|
-| Coprocessor-interface accesses | 8410 |
-| General instructions | 860 |
+| Coprocessor-interface accesses | 8174 |
+| General instructions | 852 |
 | Conditional instructions | 57 |
-| FSAVEs | 1282 |
-| FRESTOREs | 642 |
+| FSAVEs | 1244 |
+| FRESTOREs | 623 |
 
 The extra accesses are come-again polls while the FPU computes at the bus clock. Before the response hold-off (`doc/bus-timing.md`) there were 9468: a response read could also arrive before the sequencer had answered a command it had just taken.
 

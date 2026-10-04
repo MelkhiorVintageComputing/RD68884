@@ -76,7 +76,7 @@ help:
 	@echo "  make iss-trans    the transcendentals against the model, TRANS_N cases"
 	@echo "  make trans-accuracy  the transcendentals' error in ulps, against mpmath"
 	@echo
-	@echo "The system, with RD68021 ($(RD68021) at $(RD68021_REV)) as the MC68020:"
+	@echo "The system, with RD68021 ($(RD68021) at $(RD68021_REV), TME element $(RD68021_TME_REV)) as the MC68020:"
 	@echo "  make sys          the programs in SYSPROGS on every port width, and the"
 	@echo "                    RTL sequencer against the ISS, clock by clock"
 	@echo "  make cycles       clock counts against FPU section 8 (FREEZE=1 to accept)"
@@ -282,24 +282,31 @@ sim: dirs
 # The system -- M4
 #
 # RD68021 is read-only (CLAUDE.md), and its checkout moves: its branch and
-# uncommitted work are its own. So one revision of it is pinned here and
+# uncommitted work are its own. So revisions of it are pinned here and
 # exported, with `git archive` (which only reads the repository), to
-# build/rd68021-<rev>; everything below uses that copy. 6d91ae5 is its
-# mh882_experiment branch: master's RTL, plus the TME element's RTL-FPU
-# ("mh882") mode that `make sunos` needs. Its RTL list comes from its own
-# Makefile. Not in `check`: it needs that repository, and minutes.
+# build/rd68021-<rev>, and everything below uses those copies:
+#   RD68021_REV      the core: its RTL (the list from its own Makefile), its
+#                    slave model, and the SunOS scripts. dda5ee6 is master
+#                    with the RTE fix RD68884 asked for (1b57478) and posted
+#                    writes.
+#   RD68021_TME_REV  the TME element's sources. 6d91ae5 is the
+#                    mh882_experiment branch, whose element has the RTL-FPU
+#                    ("mh882") mode `make sunos` needs; master's has not.
+# Not in `check`: it needs that repository, and minutes.
 # ---------------------------------------------------------------------------
 RD68021     ?= ../RD68021
-RD68021_REV ?= 6d91ae5
+RD68021_REV ?= dda5ee6
+RD68021_TME_REV ?= 6d91ae5
 RDSRC       := $(BUILD)/rd68021-$(RD68021_REV)
+RDTME       := $(BUILD)/rd68021-$(RD68021_TME_REV)
 
-$(RDSRC)/.exported:
+$(BUILD)/rd68021-%/.exported:
 	@test -d $(RD68021)/.git || { echo "FAIL: no RD68021 repository at $(RD68021)"; exit 1; }
-	@rm -rf $(RDSRC); mkdir -p $(RDSRC)
-	@git -C $(RD68021) archive $(RD68021_REV) | tar -x -C $(RDSRC)
+	@rm -rf $(BUILD)/rd68021-$*; mkdir -p $(BUILD)/rd68021-$*
+	@git -C $(RD68021) archive $* | tar -x -C $(BUILD)/rd68021-$*
 	@touch $@
-	@echo "  rd68021: $(RD68021_REV) exported to $(RDSRC)"
-rd68021: $(RDSRC)/.exported
+	@echo "  rd68021: $* exported to $(BUILD)/rd68021-$*"
+rd68021: $(RDSRC)/.exported $(RDTME)/.exported
 CROSS   := m68k-linux-gnu-
 # sys_tb with the BIU this build names: the FPU on its own clock, or on the CPU's.
 SYSDEF := $(if $(filter 1,$(BUS_SYNC)),-DSYS_BUS_SYNC -DSYS_BUS_SYNC_WAIT=$(BUS_SYNC_WAIT))
@@ -451,6 +458,7 @@ tme: dirs rd68021
 	@test -d $(SUN3SRC)/tme-0.8_up || { echo "FAIL: no $(SUN3SRC): git submodule update --init"; exit 1; }
 	@rd="$$(cd $(RDSRC) && $(MAKE) -s print-rtl | sed 's#\(\S*\)#$(CURDIR)/$(RDSRC)/\1#g')"; \
 	  BUS_SYNC=$(BUS_SYNC) BUS_SYNC_WAIT=$(BUS_SYNC_WAIT) TME_BUILD=$(CURDIR)/$(TMEB) \
+	  RD_TME=$(CURDIR)/$(RDTME) \
 	  sim/tme/build.sh $(CURDIR) $(CURDIR)/$(RDSRC) $$rd $(addprefix $(CURDIR)/,$(RTL)) $(CURDIR)/$(VLT)
 
 sunos: tme

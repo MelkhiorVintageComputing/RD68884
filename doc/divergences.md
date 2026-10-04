@@ -12,10 +12,10 @@ These differences are visible at the pins or to software. Each is a choice, made
 | Busy state frame contents | Opaque | Opaque, our own layout (doc/model.md) | FPU 6.4.2.3: the frame must not be modified or interpreted |
 | A protocol-violating operand read | "Inconsistent data" | All ones | The access is a violation either way |
 
-## Found in RD68021 by M8 (not a divergence of RD68884)
+## Found in RD68021 by M8 (not a divergence of RD68884), fixed there
 
-**A bus-error handler that uses the coprocessor.** Take a bus error on an operand that a coprocessor primitive is moving, for example part-way through FMOVEM. If the handler executes coprocessor instructions besides FSAVE and FRESTORE before its RTE, RD68021 resumes the transfer wrongly: its next operand write to the FPU is word-sized (`$7FFE7FFE` for `$7FFE0000`), and a protocol violation follows. A real MC68020 keeps that state in its long bus-fault frame, so a page-fault handler may switch FPU contexts.
+**A bus-error handler that uses the coprocessor.** Take a bus error on an operand that a coprocessor primitive is moving, for example part-way through FMOVEM. If the handler executes coprocessor instructions besides FSAVE and FRESTORE before its RTE, RD68021 resumed the transfer wrongly: its next operand write to the FPU was word-sized (`$7FFE7FFE` for `$7FFE0000`), and a protocol violation followed. A real MC68020 keeps that state in its long bus-fault frame, so a page-fault handler may switch FPU contexts.
 
-**The repro:** `sim/programs/fpu_m8.S`, with `h_berr` replaced by a `bsr switch`.
+**The fix:** RD68021 1b57478, "RTE puts back the coprocessor primitive a bus error interrupted", on its master since dda5ee6. Its long frame now carries the primitive (`cprim`, at +$4A) and RTE reads it back.
 
-**What RD68884 does:** with FSAVE and FRESTORE alone around the RTE, which is what `fpu_m8.S` does, the busy frame resumes correctly on all three port widths. ../RD68021 is read-only from here: this is recorded for its own repository.
+**Checked here:** `sim/programs/fpu_m8.S`'s bus-error handler is now the full context switch, `bsr switch`, the original repro. It resumes correctly on all three port widths with RD68021 at dda5ee6. Before the fix it used FSAVE and FRESTORE alone.

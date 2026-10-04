@@ -254,12 +254,12 @@ FDBNE, false, not taken	30
 FDBNE, false, taken	36
 FNOP	25
 FSEQ D0	33
-FSEQ (A1)	39
-FTRAPEQ, taken, and RTE	108
+FSEQ (A1)	36
+FTRAPEQ, taken, and RTE	102
 FTRAPNE, not taken	33
 FTRAPNE.W, not taken	33
 FTRAPNE.L, not taken	34
 FSAVE (A1), null	43
-FSAVE (A1), idle	110
+FSAVE (A1), idle	108
 FRESTORE (A0), null	28
 FRESTORE (A2), idle	100

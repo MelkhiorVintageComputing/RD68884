@@ -227,15 +227,11 @@ switch:
         fmovem.x (%sp)+, %fp0-%fp7
         frestore (%sp)+
         rts
-| The bus error handler saves and restores the FPU and nothing more: RD68021
-| does not keep a coprocessor transfer's state across other coprocessor
-| instructions in the handler (doc/divergences.md), a real MC68020 does.
-h_berr: fsave   -(%sp)
-        tst.l   frames
-        bne.s   1f
-        move.l  (%sp), frame0
-1:      addq.l  #1, frames
-        frestore (%sp)+
+| The bus error handler is the same context switch: it uses the FPU between
+| FSAVE and FRESTORE, and RTE then resumes the interrupted transfer (UM
+| 7.5.2.8). RD68021 keeps the primitive across it since 1b57478, the fix for
+| what this test found at M8 (doc/divergences.md).
+h_berr: bsr     switch
         rte
 h_irq:  bsr     switch
         rte

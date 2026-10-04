@@ -18,6 +18,9 @@
 # described below in its own words.
 set -euo pipefail
 ROOT=$1; RD=$2; shift 2
+# The TME element's sources may come from another RD68021 revision than the
+# core's RTL (the Makefile's RD68021_TME_REV): RD_TME, by default the same.
+RDT=${RD_TME:-$RD}
 B=${TME_BUILD:-$ROOT/build/tme}
 SRC=$B/src
 TME=$ROOT/Inputs/ref/Run-Sun3-SunOS-4.1.1/tme-0.8_up
@@ -45,7 +48,7 @@ MDEF=-DRD_MH882
 [ "${BUS_SYNC:-0}" = 1 ] && MDEF="$MDEF -DRD_FPU_SAMECLK"
 make -s -C $V -f Vrd68021_top.mk -j8 > $B/vmake.log 2>&1
 VINC=$(verilator --getenv VERILATOR_ROOT)/include
-g++ -O2 $MDEF -c -I$V -I$VINC -I$VINC/vltstd -I$RD/sim/tme $ROOT/sim/tme/rd68021_model.cpp -o $V/rd68021_model.o
+g++ -O2 $MDEF -c -I$V -I$VINC -I$VINC/vltstd -I$RDT/sim/tme $ROOT/sim/tme/rd68021_model.cpp -o $V/rd68021_model.o
 # One relocatable object holding the wrapper, the model and the Verilator
 # runtime, with every symbol but the C interface made local. libtool builds a
 # table of every global symbol it can see for its static module preloading, and
@@ -146,7 +149,7 @@ open(p, 'w').write(s)
 PYEOF
 
 # The element, into the m68k module.
-cp $RD/sim/tme/rd68021.c $RD/sim/tme/rd68021_model.h $RD/sim/tme/rd68021_fpu.c $SRC/ic/m68k/
+cp $RDT/sim/tme/rd68021.c $RDT/sim/tme/rd68021_model.h $RDT/sim/tme/rd68021_fpu.c $SRC/ic/m68k/
 # m6888x.c includes rd68021_fpu.c, which make cannot see: rebuild it by hand.
 rm -f $SRC/ic/m68k/m6888x.lo $SRC/ic/m68k/m6888x.o
 grep -q 'rd68021.lo' $SRC/ic/m68k/Makefile \

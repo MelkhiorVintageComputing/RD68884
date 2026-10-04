@@ -26,7 +26,7 @@ Nothing under `Inputs/` may be modified, ever.
 
 ### `../RD68021` is read-only
 
-Its tools, documents and test programs may be read, run, and copied into this repository with adaptation. Nothing in that repository is ever changed from here. The system targets use a pinned revision of it (`RD68021_REV` in the Makefile), exported by `git archive` to `build/rd68021-<rev>`, never its working tree.
+Its tools, documents and test programs may be read, run, and copied into this repository with adaptation. Nothing in that repository is ever changed from here. The system targets use pinned revisions of it (`RD68021_REV` for the core, `RD68021_TME_REV` for the TME element, in the Makefile), exported by `git archive` to `build/rd68021-<rev>`, never its working tree.
 
 ### Reference implementations are oracles, not sources
 
