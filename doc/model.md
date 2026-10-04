@@ -1,6 +1,6 @@
 # The reference models
 
-`tools/model/` holds the golden models that the RTL and the microcode will be checked against. They are written from the manual alone (CLAUDE.md), in Python.
+`tools/model/` holds the golden models that the microcode and, through lockstep, the RTL are checked against. They are written from the manual alone (CLAUDE.md), in Python.
 
 | Module | What it models |
 |---|---|
@@ -10,7 +10,7 @@
 | `arith.py` | Every general instruction: results, the EXC/AEXC/CC/quotient bytes, trap vectors, the exceptional operand |
 | `transcend.py` | Mathematical reference values (mpmath) and the FMOVECR constant ROM |
 | `cpif.py` | The coprocessor interface at the level of CIR accesses: primitives, dialogs, protocol violations, FSAVE/FRESTORE frames |
-| `mpu.py` | The MC68020's side of the interface, for driving `cpif.py` (and, later, the RTL) |
+| `mpu.py` | The MC68020's side of the interface, for driving `cpif.py` and the ISS through the same dialogs |
 
 ## How they are checked
 
@@ -31,7 +31,7 @@
 - **The bottom of the extended range.** On the MC68881, an extended exponent of 0 means 2⁻¹⁶³⁸³ and may hold a normalised number (FPU table 3-3). In extF80 it means 2⁻¹⁶³⁸². Operands and results with a biased exponent below 2 are therefore skipped, and so are extF80 results flushed to zero below SoftFloat's range.
 - Single and double precision do share IEEE denormals with the MC68881. Range control (FPU 6.1.7) makes FADD in single precision exactly `f32_add`, denormals included. So that range is checked in full.
 
-**Transcendentals** are exact mathematical values. The hardware will be compared with them in ulps, against the manual's bound (FPU 4.3.2), never bit for bit.
+**Transcendentals** are exact mathematical values. The microcode is compared with them in ulps, against the manual's bound (FPU 4.3.2), never bit for bit.
 
 ## Model choices
 

@@ -38,7 +38,16 @@ The ports of `rd68884_top` are the MC68881's pins (FPU section 9, table 9-5), wi
 **DSACK** (FPU 9.8):
 - The MC68881 actively drives the lines high after AS or DS rises, then floats them. By default RD68884 floats them at once (doc/divergences.md); `DSACK_NEGATE = 1` drives them negated until the next core-clock edge first (doc/bus-timing.md).
 - The board needs pull-ups, as for the original.
-- `dsack_oe` is high only while an access is being acknowledged.
+- `dsack_oe` is high only while an access is being acknowledged, and, with `DSACK_NEGATE = 1`, for the negation after it.
+
+**Parameters of `rd68884_top`**, all build-time, all defaulting to the plain MC68881 replacement:
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `BUS_SYNC` | 0 | 1: the same-clock BIU; `clk` must be the main processor's CLK (below; doc/bus-timing.md) |
+| `BUS_SYNC_WAIT` | 0 | With `BUS_SYNC`: 1 adds one wait state and gives the strobes a whole clock to arrive |
+| `RESP_HOLD` | 20 | Core clocks a response read may wait for the answer to a command just taken (doc/bus-timing.md, "The response hold-off") |
+| `DSACK_NEGATE` | 0 | 1: DSACK driven negated before release, as the MC68881 (FPU 9.8); the asynchronous BIU only |
 
 **SENSE** (FPU 9.11) is a wire to ground on the die. It belongs to the board, not the core.
 

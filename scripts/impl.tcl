@@ -57,11 +57,16 @@ set whs 0
 # With the pins constrained (the same-clock BIU, doc/bus-timing.md) their paths
 # are half or one and a half clocks, not one: report them on their own, and
 # the core's figure from register to register.
+# Out of context with no pin constraints (the default build) such paths still
+# exist, unconstrained, with no slack: only constrained ones count.
+proc constrained {q} {
+    expr {[llength $q] > 0 && [get_property SLACK $q] ne ""}
+}
 set pin_in  [get_timing_paths -quiet -delay_type max -max_paths 1 -from [all_inputs]]
 set pin_out [get_timing_paths -quiet -delay_type max -max_paths 1 -to [all_outputs]]
-if {[llength $pin_in] > 0 || [llength $pin_out] > 0} {
+if {[constrained $pin_in] || [constrained $pin_out]} {
     foreach {what q} [list "from an input" $pin_in "to an output" $pin_out] {
-        if {[llength $q] > 0} {
+        if {[constrained $q]} {
             puts [format "RD68884: worst path %s: slack %.2f ns, %s -> %s" $what \
                 [get_property SLACK $q] [get_property STARTPOINT_PIN $q] [get_property ENDPOINT_PIN $q]]
             if {[get_property SLACK $q] < $wns} { set wns [get_property SLACK $q] }
