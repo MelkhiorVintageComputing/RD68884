@@ -29,7 +29,8 @@
 module rd68884_top #(
     parameter int BUS_SYNC      = 0,
     parameter int BUS_SYNC_WAIT = 0,
-    parameter int RESP_HOLD     = 20     // doc/bus-timing.md, "Response hold-off"
+    parameter int RESP_HOLD     = 20,    // doc/bus-timing.md, "Response hold-off"
+    parameter int DSACK_NEGATE  = 0      // 1: DSACK negated before release (FPU 9.8)
 ) (
     input  logic        clk,
     input  logic        rst_n,
@@ -74,7 +75,8 @@ module rd68884_top #(
   rd68884_biu #(
       .BUS_SYNC     (BUS_SYNC),
       .BUS_SYNC_WAIT(BUS_SYNC_WAIT),
-      .RESP_HOLD    (RESP_HOLD)
+      .RESP_HOLD    (RESP_HOLD),
+      .DSACK_NEGATE (DSACK_NEGATE)
   ) u_biu (
       .clk           (clk),
       .rst_n         (rst_n),

@@ -25,6 +25,7 @@ Size is the project's first goal (CLAUDE.md), so every milestone records what it
 | M9 | Quartus fit | 5,770 ALMs | 1,189 | 5 | 64 M10K | — | `make quartus`, for portability: 18% of the device |
 | same-clock BIU, zero wait | impl | 4358 | 904 | 6 | 21 | 16.67 MHz bus = core; pins met with strobes ≤ ~18 ns after ↓ (not a real MC68020's 30 ns) | `make impl BUS_SYNC=1`, doc/bus-timing.md |
 | same-clock BIU, one wait | impl | 4356 | 908 | 6 | 21 | 33.33 MHz bus = core, pins met against the MC68020's 33 MHz specs; core paths 19.95 ns | `make impl BUS_SYNC=1 BUS_SYNC_WAIT=1 SYNC_CLK_NS=30 ...` |
+| IIsiA7 Mini board | impl, xc7a50tftg256-1 | 4447 | 949 | 6 | 21 | 50 MHz met, +2.09 ns | `make board-iisia7`: the whole board top, real I/O, DSACK_NEGATE; doc/boards.md |
 
 M5 notes:
 - The utilisation-by-hierarchy report puts most of these LUTs in `u_rom`. Vivado has optimised across the ROM's boundary, so its outputs are decoded control rather than the 116 stored bits: the instance has 613 output pins and no flip-flops of its own besides the 3 RAMB36. Only the total is meaningful.

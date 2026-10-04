@@ -50,7 +50,7 @@ IVFLAGS := -g2012 -Wall -Wno-timescale
 .PHONY: all help dirs lint lint-source lint-iverilog lint-verilator lint-yosys \
         lint-quartus lint-questa synth impl quartus audit check print-rtl clean \
         oracles model-test testfloat testfloat-full iss-testfloat iss-arith iss-trans trans-accuracy sim ucode ucode-check \
-        iss-test rd68021 sys cycles tme sunos FORCE
+        iss-test rd68021 sys cycles tme sunos board-iisia7 FORCE
 
 all: lint
 
@@ -83,6 +83,9 @@ help:
 	@echo "  make tme          TME with RD68021 + RD68884 as a CPU element"
 	@echo "  make sunos        SunOS 4.1.1 on it, against TME's m68020/MC68881"
 	@echo
+	@echo "Boards:"
+	@echo "  make board-iisia7 bitstream and flash image for the IIsiA7 Mini (BOARD_DIVIDE=20: 50 MHz)"
+	@echo
 	@echo "Vendor tools, minutes each:"
 	@echo "  make synth        Vivado synthesis only ($(XPART)), out of context"
 	@echo "  make impl         Vivado place and route ($(XPART)), out of context"
@@ -107,7 +110,10 @@ lint: lint-source lint-iverilog lint-verilator lint-yosys
 # builds whatever these say; the other targets build the one they name.
 BUS_SYNC      ?= 0
 BUS_SYNC_WAIT ?= 0
-BUILDS        := 0:0 1:0 1:1
+# BUS_SYNC:BUS_SYNC_WAIT:DSACK_NEGATE -- the asynchronous BIU, the same-clock
+# one with no wait state and with one, and the asynchronous one negating
+# DSACK before it releases it (the IIsiA7 Mini's, doc/boards.md).
+BUILDS        := 0:0:0 1:0:0 1:1:0 0:0:1
 GENERICS      := BUS_SYNC=$(BUS_SYNC) BUS_SYNC_WAIT=$(BUS_SYNC_WAIT)
 
 # The same-clock BIU's pin timing, against the main processor's clock: its
@@ -148,17 +154,19 @@ NOTES := ': sorry: .*\(ignored\|all bits will be included\)\.$$'
 
 lint-iverilog: dirs
 	@for b in $(BUILDS); do \
-	  iverilog $(IVFLAGS) -P $(TOP).BUS_SYNC=$${b%:*} -P $(TOP).BUS_SYNC_WAIT=$${b#*:} \
+	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$${b##*:}; \
+	  iverilog $(IVFLAGS) -P $(TOP).BUS_SYNC=$$bs -P $(TOP).BUS_SYNC_WAIT=$$bw -P $(TOP).DSACK_NEGATE=$$bn \
 	    -o $(BUILD)/$(TOP).vvp -s $(TOP) $(RTL) > $(BUILD)/iverilog.log 2>&1 \
-	  || { echo "BUS_SYNC:WAIT $$b"; grep -v $(NOTES) $(BUILD)/iverilog.log; exit 1; }; \
+	  || { echo "BUS_SYNC:WAIT:NEGATE $$b"; grep -v $(NOTES) $(BUILD)/iverilog.log; exit 1; }; \
 	done
 	@echo "  iverilog: ok"
 
 lint-verilator: dirs
 	@for b in $(BUILDS); do \
-	  verilator --lint-only -Wall --top-module $(TOP) -GBUS_SYNC=$${b%:*} -GBUS_SYNC_WAIT=$${b#*:} \
+	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$${b##*:}; \
+	  verilator --lint-only -Wall --top-module $(TOP) -GBUS_SYNC=$$bs -GBUS_SYNC_WAIT=$$bw -GDSACK_NEGATE=$$bn \
 	    $(VLT) $(RTL) > $(BUILD)/verilator.log 2>&1 \
-	  || { echo "BUS_SYNC:WAIT $$b"; grep -v '^- V e r i l a t i o n\|^- Verilator:' $(BUILD)/verilator.log; exit 1; }; \
+	  || { echo "BUS_SYNC:WAIT:NEGATE $$b"; grep -v '^- V e r i l a t i o n\|^- Verilator:' $(BUILD)/verilator.log; exit 1; }; \
 	done
 	@echo "  verilator: ok"
 
@@ -167,12 +175,13 @@ lint-verilator: dirs
 # register driven from two processes, and an inferred latch. Both are gates here.
 lint-yosys: dirs
 	@set -o pipefail; for b in $(BUILDS); do \
+	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$${b##*:}; \
 	  yosys -p "read_verilog -sv $(RTL); \
-	    chparam -set BUS_SYNC $${b%:*} -set BUS_SYNC_WAIT $${b#*:} $(TOP); synth -top $(TOP); \
+	    chparam -set BUS_SYNC $$bs -set BUS_SYNC_WAIT $$bw -set DSACK_NEGATE $$bn $(TOP); synth -top $(TOP); \
 	    write_verilog $(BUILD)/$(TOP)_yosys.v" > $(BUILD)/yosys.log 2>&1 \
-	  || { echo "BUS_SYNC:WAIT $$b"; tail -40 $(BUILD)/yosys.log; exit 1; }; \
+	  || { echo "BUS_SYNC:WAIT:NEGATE $$b"; tail -40 $(BUILD)/yosys.log; exit 1; }; \
 	  if grep -q 'multiple conflicting drivers\|Warning: Identifier .* is implicitly declared\|inferring latch' $(BUILD)/yosys.log; then \
-	    echo "FAIL: yosys, BUS_SYNC:WAIT $$b"; \
+	    echo "FAIL: yosys, BUS_SYNC:WAIT:NEGATE $$b"; \
 	    grep -n 'multiple conflicting drivers\|implicitly declared\|inferring latch' $(BUILD)/yosys.log | head -20; \
 	    exit 1; fi; \
 	done
@@ -183,9 +192,12 @@ lint-yosys: dirs
 # ---------------------------------------------------------------------------
 audit: dirs
 	@for b in $(BUILDS); do \
+	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$${b##*:}; \
 	  python3 tools/reset_audit.py --top $(TOP) --build $(BUILD) \
-	    --param BUS_SYNC=$${b%:*} --param BUS_SYNC_WAIT=$${b#*:} $(RTL) || exit 1; \
+	    --param BUS_SYNC=$$bs --param BUS_SYNC_WAIT=$$bw --param DSACK_NEGATE=$$bn $(RTL) || exit 1; \
 	done
+	@# The board tops: their primitives are the vendor's, so the source only.
+	@python3 tools/reset_audit.py --source-only boards/*/*_top.sv
 
 # ---------------------------------------------------------------------------
 # Reference models -- M2
@@ -264,8 +276,10 @@ TBS := $(filter-out sys_tb,$(patsubst sim/tb/%.sv,%,$(wildcard sim/tb/*_tb.sv)))
 
 sim: dirs
 	@ok=1; for tb in $(TBS); do for b in $(BUILDS); do \
-	  def=""; [ $${b%:*} = 1 ] && def="-DBIU_SYNC -DBIU_SYNC_WAIT=$${b#*:}"; \
-	  l=$(BUILD)/$$tb-$${b%:*}$${b#*:}; \
+	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$${b##*:}; \
+	  def=""; [ $$bs = 1 ] && def="-DBIU_SYNC -DBIU_SYNC_WAIT=$$bw"; \
+	  [ $$bn = 1 ] && def="$$def -DBIU_NEGATE"; \
+	  l=$(BUILD)/$$tb-$$bs$$bw$$bn; \
 	  iverilog $(IVFLAGS) $$def -I sim/tb -o $$l.vvp -s $$tb $(RTL) sim/tb/$$tb.sv \
 	    > $$l.clog 2>&1 || { grep -v $(NOTES) $$l.clog; ok=0; continue; }; \
 	  vvp $$l.vvp > $$l.log 2>&1; \
@@ -274,7 +288,7 @@ sim: dirs
 	  elif ! grep -q '^PASS' $$l.log; then \
 	    echo "FAIL: $$tb reported no PASS"; tail -20 $$l.log; ok=0; \
 	  else \
-	    echo "  $$(grep -E '^PASS' $$l.log | head -1), BUS_SYNC:WAIT $$b"; \
+	    echo "  $$(grep -E '^PASS' $$l.log | head -1), BUS_SYNC:WAIT:NEGATE $$b"; \
 	  fi; \
 	done; done; test $$ok -eq 1 && echo "PASS: sim"
 
@@ -309,7 +323,15 @@ $(BUILD)/rd68021-%/.exported:
 rd68021: $(RDSRC)/.exported $(RDTME)/.exported
 CROSS   := m68k-linux-gnu-
 # sys_tb with the BIU this build names: the FPU on its own clock, or on the CPU's.
+# BOARD=iisia7: the IIsiA7 Mini's whole board top instead (doc/boards.md), on
+# a 32-bit port.
 SYSDEF := $(if $(filter 1,$(BUS_SYNC)),-DSYS_BUS_SYNC -DSYS_BUS_SYNC_WAIT=$(BUS_SYNC_WAIT))
+BOARD  ?=
+ifeq ($(BOARD),iisia7)
+SYSDEF    += -DSYS_BOARD_IISIA7
+SYSEXTRA  := boards/iisia7_mini/rd68884_iisia7_top.sv sim/models/mmcme2_base.sv
+SYS_PORTS := 32
+endif
 SYSPROGS  ?= fpu_m4 fpu_m5 fpu_m6 fpu_m7 fpu_m8 fpu fparith fparith-dbl
 SYS_PORTS ?= 32 16 8
 
@@ -370,7 +392,7 @@ sys: ucode-check rd68021 $(patsubst %,$(BUILD)/programs/%.hex,$(SYSPROGS))
 	@rd="$$(cd $(RDSRC) && $(MAKE) -s print-rtl | sed 's#\(\S*\)#$(RDSRC)/\1#g')"; \
 	ok=1; for port in $(SYS_PORTS); do \
 	  iverilog $(IVFLAGS) -DSYS_PORT=$$port $(SYSDEF) -o $(BUILD)/sys_tb_$$port.vvp -s sys_tb \
-	    $(RTL) $$rd $(RDSRC)/sim/models/rd68021_slave.sv sim/tb/sys_tb.sv \
+	    $(RTL) $(SYSEXTRA) $$rd $(RDSRC)/sim/models/rd68021_slave.sv sim/tb/sys_tb.sv \
 	    > $(BUILD)/sys_tb_$$port.clog 2>&1 || { grep -v $(NOTES) $(BUILD)/sys_tb_$$port.clog | head; exit 1; }; \
 	  for p in $(SYSPROGS); do \
 	    ls=""; if [ $$port = 32 ]; then ls="+lockstep=$(BUILD)/sys-$$p.lockstep"; fi; \
@@ -523,6 +545,31 @@ impl: dirs $(if $(filter 1,$(BUS_SYNC)),$(BUILD)/rd68884_sync.xdc)
 	    > impl.log 2>&1; rc=$$?; \
 	  grep -E '^(RD68884|ERROR|CRITICAL WARNING)' impl.log; exit $$rc
 
+# ---------------------------------------------------------------------------
+# A board: the IIsiA7 Mini, an MC68881 for the Macintosh IIsi's MC68030 on its
+# Processor Direct Slot -- doc/boards.md
+#
+# The pins come from the board's own LiteX platform in Inputs/IIsiFPGA (a
+# submodule), through tools/board_pins.py. The core clock is 1000 MHz /
+# BOARD_DIVIDE from the 100 MHz oscillator: 20 for 50 MHz; if timing fails,
+# 22 (45.45), 25 (40), 30 (33.33). Writes the bitstream and the SPI flash image
+# (.bin as the platform's flow, and .mcs) to build/iisia7_mini.
+# ---------------------------------------------------------------------------
+IISI_PLATFORM := Inputs/IIsiFPGA/IIsi-to-ztex-gateware/IIsiA7_Mini_pds.py
+IISI_PART     ?= xc7a50tftg256-1
+BOARD_DIVIDE  ?= 20
+IISI_BUILD    := $(BUILD)/iisia7_mini
+
+board-iisia7: dirs
+	@test -f $(IISI_PLATFORM) || { echo "FAIL: no $(IISI_PLATFORM): git submodule update --init"; exit 1; }
+	@mkdir -p $(IISI_BUILD)
+	@python3 tools/board_pins.py $(IISI_PLATFORM) $(IISI_BUILD)/pins.xdc
+	@printf '%s\n' $(addprefix $(CURDIR)/,$(RTL)) > $(IISI_BUILD)/rtl.f
+	@cd $(IISI_BUILD) && $(CURDIR)/scripts/vivado.sh -mode batch -nojournal -nolog \
+	    -source $(CURDIR)/boards/iisia7_mini/build.tcl \
+	    -tclargs $(CURDIR) $(IISI_PART) $(BOARD_DIVIDE) > build.log 2>&1; rc=$$?; \
+	  grep -E '^(RD68884|ERROR|CRITICAL WARNING)' build.log; exit $$rc
+
 # quartus_map returns 0 on the thing that matters most, so the grep is the gate:
 # a package-scoped constant inside a port expression becomes an implicit net,
 # Warning (10236), and the netlist stops matching the source.
@@ -552,8 +599,9 @@ quartus: dirs
 
 lint-questa: dirs
 	@for b in $(BUILDS); do \
-	  QUESTA_G="-GBUS_SYNC=$${b%:*} -GBUS_SYNC_WAIT=$${b#*:}" scripts/questa.sh $(BUILD) $(TOP) $(RTL) \
-	    || { echo "BUS_SYNC:WAIT $$b"; exit 1; }; \
+	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$${b##*:}; \
+	  QUESTA_G="-GBUS_SYNC=$$bs -GBUS_SYNC_WAIT=$$bw -GDSACK_NEGATE=$$bn" scripts/questa.sh $(BUILD) $(TOP) $(RTL) \
+	    || { echo "BUS_SYNC:WAIT:NEGATE $$b"; exit 1; }; \
 	done
 	@echo "  questa: ok"
 

@@ -38,11 +38,23 @@
 `define SYS_PORT 32
 `endif
 
+// SYS_BOARD_IISIA7: the whole IIsiA7 Mini board top on the bus instead of
+// rd68884_top (doc/boards.md): its own clock from a 100 MHz oscillator through
+// the MMCM stand-in, its chip select from the full address and FC, DSACK and
+// HALT as wires with the motherboard's pull-ups, HALT to the CPU. 32-bit port.
+`ifdef SYS_BOARD_IISIA7
+`define FPU board.u_fpu
+`define FCLK board.clk
+`else
+`define FPU fpu
+`endif
+
 `ifdef SYS_BUS_SYNC
 `ifndef SYS_BUS_SYNC_WAIT
 `define SYS_BUS_SYNC_WAIT 0
 `endif
 `define FCLK clk
+`elsif SYS_BOARD_IISIA7
 `else
 `define FCLK clk_fpu
 `endif
@@ -97,7 +109,11 @@ module sys_tb;
       .ipl_n_i (ipl_n), .ipend_n_o (ipend_n_o), .avec_n_i (avec_n),
       .br_n_i (1'b1), .bg_n_o (bg_n_o), .bgack_n_i (1'b1), .berr_n_i (berr_n),
       .reset_n_i (1'b1), .reset_n_o (reset_n_o), .reset_n_oe (reset_n_oe),
+`ifdef SYS_BOARD_IISIA7
+      .halt_n_i (board_halt), .halt_n_o (halt_n_o), .halt_n_oe (halt_n_oe),
+`else
       .halt_n_i (1'b1), .halt_n_o (halt_n_o), .halt_n_oe (halt_n_oe),
+`endif
       .cdis_n_i (1'b1));
 
   // ---- memory -------------------------------------------------------------------
@@ -123,6 +139,47 @@ module sys_tb;
   // Early chip select: no AS in the decode (FPU 10.3).
   assign cs_n = !(fc_o == 3'd7 && a_o[19:16] == 4'h2 && a_o[15:13] == 3'd1);
 
+`ifdef SYS_BOARD_IISIA7
+  // ---- the IIsiA7 Mini ---------------------------------------------------------
+  logic clk100;
+  initial begin
+    clk100 = 1'b0;
+    #3.3;
+    forever #5.0 clk100 = ~clk100;
+  end
+  wire [1:0] board_dsack;
+  wire       board_halt;
+  wire [3:0] board_leds;
+  assign (weak0, weak1) board_dsack = 2'b11;     // the motherboard's pull-ups
+  assign (weak0, weak1) board_halt  = 1'b1;
+  assign fpu_dsack_n  = board_dsack;
+  assign fpu_dsack_oe = 1'b1;
+  wire unused_board = &{1'b0, cs_n, fpu_d_i, fpu_d_o, fpu_d_oe, board_leds};
+  assign fpu_d_i = dbus;
+  assign fpu_d_o = 32'd0;
+  assign fpu_d_oe = 4'd0;
+
+  rd68884_iisia7_top board (
+      .clk100      (clk100),
+      .A_3v3       (a_o),
+      .fc_3v3      (fc_o),
+      .as_3v3_n    (as_n_o),
+      .ds_3v3_n    (ds_n_o),
+      .rw_3v3_n    (rw_o),
+      .reset_3v3_n (1'b1),
+      .D_3v3       (dbus),
+      .dsack_3v3_n (board_dsack),
+      .halt_3v3_n  (board_halt),
+      .user_leds   (board_leds));
+
+  // HALT: held while the FPU is not ready, released for good after.
+  logic halt_seen, halt_released;
+  initial begin halt_seen = 0; halt_released = 0; end
+  always @(board_halt) begin
+    if (board_halt === 1'b0) halt_seen = 1;
+    if (board_halt === 1'b1 && halt_seen) halt_released = 1;
+  end
+`else
   // The lanes: on a 16-bit port D15-D0 of the FPU are tied to D31-D16, on an
   // 8-bit port all four bytes to D31-D24.
   generate
@@ -155,6 +212,7 @@ module sys_tb;
       .a_i ({a_o[4:1], (PORT == 32) ? 1'b1 : (PORT == 16) ? 1'b0 : a_o[0]}),
       .d_i (fpu_d_i), .d_o (fpu_d_o), .d_oe (fpu_d_oe),
       .dsack_n_o (fpu_dsack_n), .dsack_oe (fpu_dsack_oe));
+`endif
 
   function automatic logic [31:0] peek(input int unsigned a);
     peek = {s32.mem[a], s32.mem[a+1], s32.mem[a+2], s32.mem[a+3]};
@@ -253,18 +311,18 @@ module sys_tb;
   end
   // BIU outputs, then the sequencer's outputs, then its micro-address, in the
   // order tools/iss/lockstep.py reads them. Sampled just before the edge.
-  always @(posedge `FCLK) if (ls != 0 && rst_n) begin
+  always @(posedge `FCLK) if (ls != 0 && `FPU.rst_n) begin
     $fwrite(ls, "%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h | ",
-      fpu.arch_reset, fpu.cmd_pend, fpu.cmd_cond, fpu.cmd_word, fpu.opw_valid,
-      fpu.opw_data, fpu.opr_valid, fpu.save_req, fpu.restore_req,
-      fpu.restore_word, fpu.fpiar, fpu.pv, fpu.resp_read, fpu.rsel_read,
-      fpu.save_read, fpu.abort);
+      `FPU.arch_reset, `FPU.cmd_pend, `FPU.cmd_cond, `FPU.cmd_word, `FPU.opw_valid,
+      `FPU.opw_data, `FPU.opr_valid, `FPU.save_req, `FPU.restore_req,
+      `FPU.restore_word, `FPU.fpiar, `FPU.pv, `FPU.resp_read, `FPU.rsel_read,
+      `FPU.save_read, `FPU.abort);
     $fwrite(ls, "%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h | %h\n",
-      fpu.resp_we, fpu.resp, fpu.resp_oneshot, fpu.expect_v, fpu.resp_cond,
-      fpu.cmd_ack, fpu.opw_ack, fpu.opr_we, fpu.opr, fpu.rsel_we, fpu.rsel,
-      fpu.rsel_dir, fpu.save_we, fpu.save_v, fpu.save_xfer, fpu.restore_we,
-      fpu.restore_v, fpu.restore_xfer, fpu.fpiar_we, fpu.fpiar_v, fpu.clear,
-      fpu.u_seq.upc);
+      `FPU.resp_we, `FPU.resp, `FPU.resp_oneshot, `FPU.expect_v, `FPU.resp_cond,
+      `FPU.cmd_ack, `FPU.opw_ack, `FPU.opr_we, `FPU.opr, `FPU.rsel_we, `FPU.rsel,
+      `FPU.rsel_dir, `FPU.save_we, `FPU.save_v, `FPU.save_xfer, `FPU.restore_we,
+      `FPU.restore_v, `FPU.restore_xfer, `FPU.fpiar_we, `FPU.fpiar_v, `FPU.clear,
+      `FPU.u_seq.upc);
   end
 
   // ---- the run ----------------------------------------------------------------------
@@ -313,6 +371,10 @@ module sys_tb;
       $display("FAIL: sys_tb: %0d of %0d checks failed, first #%0d: found %08h, wanted %08h",
                peek(RES + 8), peek(RES + 4), peek(RES + 12), peek(RES + 32'h18),
                peek(RES + 32'h1C));
+`ifdef SYS_BOARD_IISIA7
+    end else if (!halt_seen || !halt_released) begin
+      $display("FAIL: sys_tb: the board did not hold HALT and then release it");
+`endif
     end else begin
       $display("PASS: sys_tb, %0d checks", peek(RES + 4));
     end

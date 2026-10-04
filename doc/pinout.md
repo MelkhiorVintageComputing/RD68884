@@ -36,7 +36,7 @@ The ports of `rd68884_top` are the MC68881's pins (FPU section 9, table 9-5), wi
 - On a 32-bit port, a 16-bit CIR is always on D31–D16, acknowledged as a 16-bit port (table 9-3).
 
 **DSACK** (FPU 9.8):
-- The MC68881 actively drives the lines high after AS or DS rises, then floats them. RD68884 floats them at once (doc/divergences.md).
+- The MC68881 actively drives the lines high after AS or DS rises, then floats them. By default RD68884 floats them at once (doc/divergences.md); `DSACK_NEGATE = 1` drives them negated until the next core-clock edge first (doc/bus-timing.md).
 - The board needs pull-ups, as for the original.
 - `dsack_oe` is high only while an access is being acknowledged.
 

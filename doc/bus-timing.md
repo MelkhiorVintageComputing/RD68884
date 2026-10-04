@@ -33,7 +33,16 @@ The cost is one or two wait states per CIR access, which is performance, not com
 
 ### DSACK release
 
-FPU 9.8: "DSACK1 and DSACK0 lines are actively pulled up (negated) by the FPCP following the rising edge of AS or DS, and ... then three-stated." RD68884 three-states them at once, without the actively driven high phase. The board's pull-ups then raise the lines. `doc/divergences.md` records this.
+FPU 9.8: "DSACK1 and DSACK0 lines are actively pulled up (negated) by the FPCP following the rising edge of AS or DS, and ... then three-stated."
+
+**`DSACK_NEGATE = 0`, the default.** RD68884 three-states the lines at once, without the actively driven high phase. The board's pull-ups then raise them. `doc/divergences.md` records this.
+
+**`DSACK_NEGATE = 1`** (the asynchronous BIU only; the IIsiA7 Mini's build, `doc/boards.md`). The lines stay driven, negated, from START false until the first core-clock edge that samples the stale guard, then float.
+- **Negated at once:** combinationally from the raw START, as before (specification 21).
+- **Released within one core period** of START falling (specification 22, 40 ns at 20 MHz): 20 ns at 50 MHz. A START that falls on the very instant of an edge is seen on the next one.
+- **A pulse can be nearly zero** when START falls just before an edge. That is allowed; the pull-ups remain.
+- **The rank that ends the pulse** is a copy of the stale guard's first synchroniser rank, and synthesis merges the two. It may go metastable, but every value it can give at the pins is "negated".
+- **`biu_tb`** runs this build and checks that DSACK is never driven asserted with START false, never driven longer than a core period after it, and that the negation does happen: about 1,975 pulses in a run.
 
 ## Inputs
 

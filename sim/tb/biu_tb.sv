@@ -92,6 +92,8 @@ module biu_tb;
 
 `ifdef BIU_SYNC
   rd68884_biu #(.BUS_SYNC(1), .BUS_SYNC_WAIT(`BIU_SYNC_WAIT)) dut (
+`elsif BIU_NEGATE
+  rd68884_biu #(.DSACK_NEGATE(1)) dut (
 `else
   rd68884_biu dut (
 `endif
@@ -205,11 +207,30 @@ module biu_tb;
   // all: START = CS * AS * (DS + /RW), section 12 note 8.
   logic start_pins;
   assign start_pins = !cs_n && !as_n && (!ds_n || !rw);
+  // BIU_NEGATE (DSACK_NEGATE = 1): after START falls DSACK may stay driven,
+  // negated, until the first core-clock edge that samples the stale guard --
+  // at most one core period: START falling at the very instant of an edge is
+  // seen on the next one. negations counts the pulses seen, which must be
+  // some.
+  realtime start_fell = 0.0;
+  integer  negations = 0;
+  always @(negedge start_pins) start_fell = $realtime;
+  always @(posedge dsack_oe) if (!start_pins) negations++;
+
   always @(start_pins or dsack_oe or fpu_d_oe or posedge clk) begin : ac
     #0;
+`ifdef BIU_NEGATE
+    // FPU 9.8: driven high (negated) after START falls, then three-stated,
+    // within the window; still negated at once (specification 21).
+    if (dsack_oe && !start_pins &&
+        (dsack_n != 2'b11 || $realtime - start_fell > core_ns + 0.2))
+      check(0, $sformatf("DSACK %s with START false",
+                         dsack_n != 2'b11 ? "asserted" : "driven more than a core clock"));
+`else
     // Specifications 21/22: DSACK released the moment START is false.
     if (dsack_oe && !start_pins)
       check(0, "DSACK driven with START false (specifications 21/22)");
+`endif
     // Specifications 15/16: data released with DS (reads only).
     if (fpu_d_oe != 0 && (!start_pins || ds_n || !rw))
       check(0, "data driven outside a read with DS asserted (specification 16)");
@@ -217,7 +238,7 @@ module biu_tb;
     if (dsack_oe && dsack_n != 2'b11 && rw && fpu_d_oe == 4'b0000)
       check(0, "DSACK asserted on a read with no data lanes (specification 20)");
     // Specification 19A: DSACK0 and DSACK1 change together.
-    if (dsack_oe && dsack_n == 2'b11)
+    if (dsack_oe && dsack_n == 2'b11 && start_pins)
       check(0, "DSACK enabled but neither line asserted (specification 19A)");
   end
 
@@ -928,6 +949,10 @@ module biu_tb;
     end
 `ifdef BIU_SYNC
     $display("biu_tb: %0d same-clock cycles, %0d wait states in all", sync_cycles, sync_waits);
+`endif
+`ifdef BIU_NEGATE
+    $display("biu_tb: DSACK actively negated %0d times", negations);
+    check(negations > 100, "DSACK is actively negated (FPU 9.8)");
 `endif
     if (errors == 0) $display("PASS: biu_tb, %0d checks", checks);
     else             $display("FAIL: biu_tb, %0d of %0d checks failed", errors, checks);

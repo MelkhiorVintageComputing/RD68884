@@ -98,6 +98,7 @@ Project documents:
 | `doc/model.md` | The Python reference models, how they are checked, and every choice they make where the manual is silent |
 | `doc/system.md` | SunOS 4.1.1 in TME with RD68021 and RD68884 (`make sunos`) |
 | `doc/timing-divergences.md` | Clock counts against FPU section 8, and why each differs (`make cycles`) |
+| `doc/boards.md` | Boards: the IIsiA7 Mini for the Macintosh IIsi's PDS (`make board-iisia7`) |
 
 ## Building and checking
 
@@ -109,6 +110,7 @@ make sim      # the directed testbenches in sim/tb
 make ucode    # regenerate rtl/gen/ from tools/ucode/ (ucode-check is part of check)
 make sys      # the system with RD68021 as the MC68020, and the RTL/ISS lockstep
 make cycles   # clock counts against FPU section 8; FREEZE=1 accepts a change
+make board-iisia7    # bitstream and flash image for the IIsiA7 Mini (Inputs/IIsiFPGA)
 make sunos    # SunOS 4.1.1 in TME on RD68021 + RD68884, against TME's m68020/MC68881 (~15 min)
 make model-test      # the reference models' unit tests (doc/model.md)
 make testfloat       # the arithmetic model against TestFloat (make oracles builds it)
@@ -123,7 +125,7 @@ make lint-quartus / make quartus / make lint-questa
 
 `make help` lists every target.
 
-The BIU's front end is a build choice (doc/bus-timing.md): `BUS_SYNC=0` (the default) takes the bus as asynchronous; `BUS_SYNC=1` runs the core on the main processor's CLK, with `BUS_SYNC_WAIT=0` or `1` wait states. `lint`, `audit` and `sim` cover all three builds; `sys`, `synth`, `impl`, `quartus`, `lint-quartus`, `tme` and `sunos` build the one named, for example `make sys BUS_SYNC=1`. `make cycles` measures both.
+The BIU's front end is a build choice (doc/bus-timing.md): `BUS_SYNC=0` (the default) takes the bus as asynchronous; `BUS_SYNC=1` runs the core on the main processor's CLK, with `BUS_SYNC_WAIT=0` or `1` wait states. `DSACK_NEGATE=1` drives DSACK negated before releasing it, as the MC68881 does. `lint`, `audit` and `sim` cover all four builds (the three, and the asynchronous one with `DSACK_NEGATE`); `sys`, `synth`, `impl`, `quartus`, `lint-quartus`, `tme` and `sunos` build the one named, for example `make sys BUS_SYNC=1`. `make cycles` measures both.
 
 ## Tooling notes
 

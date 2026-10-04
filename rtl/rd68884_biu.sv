@@ -58,6 +58,14 @@
 //
 // The golden model of all of this is tools/model/cpif.py.
 //
+// DSACK RELEASE. FPU 9.8: the MC68881 drives DSACK1/DSACK0 high (negated)
+// after AS or DS rises, then three-states them. With DSACK_NEGATE = 0 this
+// BIU three-states them at once and leaves the rise to the board's pull-ups
+// (doc/divergences.md). With DSACK_NEGATE = 1 (the asynchronous front end
+// only) they stay driven, negated, from START false until the first core-clock
+// edge after it, then float: within a core clock, inside specification 22
+// (doc/bus-timing.md).
+//
 // THE SAME-CLOCK FRONT END (BUS_SYNC = 1). On a board where clk IS the
 // MC68020's CLK, the strobes are synchronous to it, and the synchronisers and
 // the stale guard only add latency. This front end samples the raw pins on the
@@ -84,7 +92,8 @@
 module rd68884_biu #(
     parameter int BUS_SYNC      = 0,     // 1: clk is the main processor's CLK
     parameter int BUS_SYNC_WAIT = 0,     // with BUS_SYNC: 1 = one wait state
-    parameter int RESP_HOLD     = 20     // clocks a fresh response read may wait
+    parameter int RESP_HOLD     = 20,    // clocks a fresh response read may wait
+    parameter int DSACK_NEGATE  = 0      // 1: DSACK driven negated before release
 ) (
     input  logic        clk,
     input  logic        rst_n,
@@ -198,6 +207,7 @@ module rd68884_biu #(
   logic stale;
   logic stale_s;
   logic stale_clr;
+  logic neg_q;                   // stale, one rank: ends DSACK's negation
 
   generate
     if (BUS_SYNC != 0) begin : g_sync_front
@@ -242,6 +252,7 @@ module rd68884_biu #(
         assign stale = ~start_s;
       end
       assign stale_s = 1'b0;
+      assign neg_q   = 1'b1;     // DSACK_NEGATE is the asynchronous front end's
       logic unused_stale_clr;
       assign unused_stale_clr = stale_clr;
     end else begin : g_async_front
@@ -287,6 +298,24 @@ module rd68884_biu #(
           .d    (stale_q),
           .q    (stale_s)
       );
+
+      // DSACK_NEGATE: stale sampled on every edge. Between START falling
+      // (stale set, at once) and the next edge (neg_q set), DSACK is driven
+      // negated. neg_q may go metastable on that edge; it only ends a pulse
+      // whose every value at the pins is "negated".
+      if (DSACK_NEGATE != 0) begin : g_negate
+        logic neg_r;
+        always_ff @(posedge clk or negedge rst_n) begin
+          if (!rst_n) begin
+            neg_r <= 1'b1;
+          end else begin
+            neg_r <= stale_q;
+          end
+        end
+        assign neg_q = neg_r;
+      end else begin : g_no_negate
+        assign neg_q = 1'b1;
+      end
     end
   endgenerate
 
@@ -864,7 +893,9 @@ module rd68884_biu #(
   // ==========================================================================
   logic drive;
   assign drive     = ack_q & start_raw & ~stale;
-  assign dsack_oe  = drive;
+  logic negate;                  // DSACK_NEGATE: see the header
+  assign negate    = ack_q & stale & ~neg_q;
+  assign dsack_oe  = drive | negate;
   assign dsack_n_o = drive ? dsack_q : 2'b11;
   assign d_oe      = (drive & rd_q) ? lanes_q : 4'b0000;
 
