@@ -202,8 +202,11 @@ FP_ZERO = FP(0, EXP_ZERO, 0)
 
 
 class Core:
-    def __init__(self, words, crom=None):
+    def __init__(self, words, crom=None, labels=None, model=68881):
         self.words = words
+        self.model = model          # 68881 or 68882 (RD68885, doc/rd68885.md)
+        if labels is not None:
+            self.labels = labels
         if crom is None:
             import json
             with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -312,8 +315,8 @@ class Core:
                 'MASK_ZERO': int(self.mask == 0), 'TF': tf, 'BSUN': bsun,
                 'BSUN_EN': self.fpcr >> 15 & 1,
                 'REST_NULL': int(b['restore_word'] >> 8 == 0),
-                'REST_IDLE': int(b['restore_word'] == 0x1F18),
-                'REST_BUSY': int(b['restore_word'] == 0x1FB4),
+                'REST_IDLE': int(b['restore_word'] == (0x1F38 if self.model == 68882 else 0x1F18)),
+                'REST_BUSY': int(b['restore_word'] == (0x1FD4 if self.model == 68882 else 0x1FB4)),
                 'FLINE': int(opclass == 1 or ((opclass == 0 or (opclass == 2 and rx != 7))
                                               and cmd >> 6 & 1)),
                 'REPORTS': int(opclass in (0, 2, 3)), 'PCEN': pcen,

@@ -56,6 +56,10 @@ package rd68884_pkg;
   localparam logic [15:0] FRAME_INVALID     = 16'h0218;
   localparam logic [15:0] FRAME_IDLE        = 16'h1F18;  // 24 bytes follow
   localparam logic [15:0] FRAME_BUSY        = 16'h1FB4;  // 180 bytes follow
+  // The MC68882's (RD68885): 32 bytes of conversion-unit state more each
+  // (FPU figure 6-5, table 6-6; doc/rd68885.md). The version byte is the same.
+  localparam logic [15:0] FRAME82_IDLE      = 16'h1F38;  // 56 bytes follow
+  localparam logic [15:0] FRAME82_BUSY      = 16'h1FD4;  // 212 bytes follow
 
   // -------------------------------------------------------------------------
   // What the BIU expects next (FPU 6.1.12; the pending-access code of the BIU

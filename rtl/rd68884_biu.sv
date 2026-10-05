@@ -93,7 +93,8 @@ module rd68884_biu #(
     parameter int BUS_SYNC      = 0,     // 1: clk is the main processor's CLK
     parameter int BUS_SYNC_WAIT = 0,     // with BUS_SYNC: 1 = one wait state
     parameter int RESP_HOLD     = 20,    // clocks a fresh response read may wait
-    parameter int DSACK_NEGATE  = 0      // 1: DSACK driven negated before release
+    parameter int DSACK_NEGATE  = 0,     // 1: DSACK driven negated before release
+    parameter int MODEL         = 68881  // 68881 (RD68884) or 68882 (RD68885)
 ) (
     input  logic        clk,
     input  logic        rst_n,
@@ -582,6 +583,13 @@ module rd68884_biu #(
   logic [31:0] rd_out;
   assign rd_out = first_part ? rd_word : hold_q;
 
+  // The response is a floating-point exception's take-exception primitive:
+  // pre- or mid-instruction ($1C/$1D, with or without the PC bit), vectors
+  // 48 to 54 (FPU table 7-6). The MC68882 keeps it past the acknowledge.
+  logic fp_exc_resp;
+  assign fp_exc_resp = (resp_q[13:9] == 5'b01110) && (resp_q[7:0] >= 8'd48) &&
+                       (resp_q[7:0] <= 8'd54);
+
   // Events of the completing access.
   logic ev_resp, ev_rsel, ev_save, ev_save_again, ev_abort, ev_cmd, ev_opw;
   logic ev_opr, ev_rest_w, ev_rest_r, ev_iar, ev_pv;
@@ -609,7 +617,14 @@ module rd68884_biu #(
       // FPU 7.2.2: a control write is never illegal, and with a violation
       // pending it is the acknowledge that clears it. A save read and the
       // response read stay legal too (FPU 7.2.1, 7.2.3).
-      ev_abort = is_ctrl & ~rd_d;
+      // The MC68882 tells the AB bit (16 here) from the XA bit (17): an
+      // exception acknowledge leaves a floating-point exception reported --
+      // the take-exception primitive and the pending state stay until FSAVE
+      // or a null FRESTORE, which the handler's FSAVE / BSET / FRESTORE does
+      // (FPU 7.2.2, 7.4.2.5, 5.2.2). Anything else is acknowledged as the
+      // MC68881 does.
+      ev_abort = is_ctrl & ~rd_d &
+                 ((MODEL != 68882) | wmerged[16] | ~fp_exc_resp);
       if (pv_q) begin
         ev_save       = save_ok & is_save & rd_d & (first_part ? save_valid_q : hold_save_q);
         ev_save_again = save_ok & is_save & rd_d & ~(first_part ? save_valid_q : hold_save_q);

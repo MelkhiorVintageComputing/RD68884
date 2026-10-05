@@ -24,8 +24,9 @@ CIR_INSTADDR = 0x18
 
 
 class Biu:
-    def __init__(self, resp_hold=RESP_HOLD):
+    def __init__(self, resp_hold=RESP_HOLD, model=68881):
         self.resp_hold = resp_hold
+        self.model = model          # 68882: the control CIR's XA bit, below
         self.reset()
 
     def reset(self):
@@ -169,7 +170,12 @@ class Biu:
                 self.expect, self.xfer, self.restore_xfer = EXP_OPW, self.restore_xfer, 0
             elif cir == CIR_INSTADDR and write:
                 self.fpiar = value & 0xFFFFFFFF
-        if cir == CIR_CONTROL and write:
+        # The MC68882 keeps a floating-point exception reported past an
+        # exception acknowledge (XA, bit 1) that is not also an abort (AB,
+        # bit 0): FPU 7.2.2, 7.4.2.5; rtl/rd68884_biu.sv.
+        fp_exc = (self.resp >> 9 & 0x1F) == 0b01110 and 48 <= (self.resp & 0xFF) <= 54
+        keep = self.model == 68882 and not (value & 1) and fp_exc
+        if cir == CIR_CONTROL and write and not keep:
             ev['abort'] = 1
             self.pv, self.resp, self.oneshot, self.expect = 0, 0x0802, 0, EXP_CMD
             self.cmd_pend = self.opw_valid = self.opr_valid = self.fresh = 0

@@ -239,9 +239,9 @@ _start:
         move.l  (%sp), %d0
         clr.w   %d0
         swap    %d0
-        move.l  #0x1F18, %d1
+        move.l  #FRAME_IDLE, %d1            | per model (Makefile, FRAMESYM_*)
         bsr     check
-        bclr    #3, 0x18(%sp)               | EXC PEND (bit 27), active low
+        bclr    #3, IDLE_SIZE(%sp)          | EXC PEND (bit 27), active low
         fmove.l #0x00000400, %fpcr          | DZ enabled
         fmove.l #0x00000400, %fpsr          | DZ in EXC
         frestore (%sp)+
@@ -360,13 +360,23 @@ h_format:
         move.l  (%sp)+, %d0
         rte
 
+| BSUN: the handler's first FPU instruction must be FSAVE on an MC68882,
+| whose exception still holds the interface (FPU 5.2.2); FPCR is cleared
+| between FSAVE and FRESTORE, so the rerun does not trap again.
 h_bsun:
         addq.l  #1, nbsun
-        fmove.l #0, %fpcr                   | so the rerun does not trap again
+        move.l  %d0, -(%sp)
+        fsave   -(%sp)
+        moveq   #0, %d0
+        move.b  1(%sp), %d0
+        bset    #3, (%sp,%d0.w)
+        fmove.l #0, %fpcr
+        frestore (%sp)+
+        move.l  (%sp)+, %d0
         rte
 
 | The MC68881 clears the pending exception on the acknowledge (FPU 6.1.13),
-| so an RTE alone is a complete handler.
+| so an RTE alone would be a complete handler; an MC68882 needs fp_clear.
 h_arith:
         addq.l  #1, narith
         move.l  %d0, -(%sp)
@@ -374,6 +384,19 @@ h_arith:
         andi.l  #0x0FFF, %d0
         lsr.l   #2, %d0
         move.l  %d0, lastvec
+        move.l  (%sp)+, %d0
+| An MC68882 keeps a floating-point exception reported until its handler
+| clears it in the state frame (FPU 5.2.2, figure 5-6): FSAVE, EXC_PEND
+| (bit 27 of the BIU flags, the frame's last long word) set to inactive,
+| FRESTORE. On an MC68881 the acknowledge has already cleared it, and the
+| BSET changes nothing.
+fp_clear:
+        move.l  %d0, -(%sp)
+        fsave   -(%sp)
+        moveq   #0, %d0
+        move.b  1(%sp), %d0
+        bset    #3, (%sp,%d0.w)
+        frestore (%sp)+
         move.l  (%sp)+, %d0
         rte
 

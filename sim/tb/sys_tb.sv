@@ -38,6 +38,11 @@
 `define SYS_PORT 32
 `endif
 
+// SYS_MODEL: 68881 (RD68884, the default) or 68882 (RD68885, doc/rd68885.md).
+`ifndef SYS_MODEL
+`define SYS_MODEL 68881
+`endif
+
 // SYS_BOARD_IISIA7: the whole IIsiA7 Mini board top on the bus instead of
 // rd68884_top (doc/boards.md): its own clock from a 100 MHz oscillator through
 // the MMCM stand-in, its chip select from the full address and FC, DSACK and
@@ -202,9 +207,9 @@ module sys_tb;
   endgenerate
 
 `ifdef SYS_BUS_SYNC
-  rd68884_top #(.BUS_SYNC(1), .BUS_SYNC_WAIT(`SYS_BUS_SYNC_WAIT)) fpu (
+  rd68884_top #(.BUS_SYNC(1), .BUS_SYNC_WAIT(`SYS_BUS_SYNC_WAIT), .MODEL(`SYS_MODEL)) fpu (
 `else
-  rd68884_top fpu (
+  rd68884_top #(.MODEL(`SYS_MODEL)) fpu (
 `endif
       .clk (`FCLK), .rst_n (rst_n), .reset_n_i (1'b1),
       .cs_n_i (cs_n), .as_n_i (as_n_o), .ds_n_i (ds_n_o), .rw_i (rw_o),

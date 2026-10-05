@@ -93,10 +93,22 @@ check:  addq.l  #1, RES+4
 | The arithmetic exceptions, pre- or mid-instruction (FPU 6.1, UM 7.4): note
 | the vector and return; a pre-instruction exception's RTE runs the
 | instruction again, now with nothing pending.
+| An MC68882 keeps a floating-point exception reported until its handler
+| clears it in the state frame (FPU 5.2.2, figure 5-6): FSAVE, EXC_PEND
+| (bit 27 of the BIU flags, the frame's last long word) set to inactive,
+| FRESTORE. On an MC68881 the acknowledge has already cleared it, and the
+| BSET changes nothing.
 h_arith:
         move.w  6(%sp), %d7
         andi.l  #0x0FFF, %d7
         lsr.l   #2, %d7
+        move.l  %d0, -(%sp)
+        fsave   -(%sp)
+        moveq   #0, %d0
+        move.b  1(%sp), %d0
+        bset    #3, (%sp,%d0.w)
+        frestore (%sp)+
+        move.l  (%sp)+, %d0
         rte
 
 unexpected:

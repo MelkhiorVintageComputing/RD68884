@@ -12,7 +12,8 @@
 | the FPU (the interrupt handler also saves the user's FP registers, uses the
 | FPU, and puts everything back), and returns: RTE runs the faulted access again (UM 7.5.2.8), or reads the
 | response again after an interrupt (UM 7.4.1). The two runs must agree, and
-| the frame the handler saved must be the one expected: busy ($1FB4) in the
+| the frame the handler saved must be the one expected: busy ($1FB4, $1FD4 on
+| an MC68882; the Makefile's FRAMESYM_*) in the
 | middle of a transfer (FPU 6.4.2.3).
 |
 |   RES+$00  'DONE'            RES+$04  checks made      RES+$08  checks failed
@@ -75,7 +76,7 @@ _start:
         bsr     check                       | one fault taken
         move.l  frame0, %d0
         clr.w   %d0
-        move.l  #0x1FB40000, %d1
+        move.l  #(FRAME_BUSY << 16), %d1
         bsr     check                       | a busy frame
 
 | ---------------------------------------------------------------------------
@@ -93,7 +94,7 @@ _start:
         bsr     check
         move.l  frame0, %d0
         clr.w   %d0
-        move.l  #0x1FB40000, %d1
+        move.l  #(FRAME_BUSY << 16), %d1
         bsr     check
 
 | ---------------------------------------------------------------------------
@@ -110,7 +111,7 @@ _start:
         bsr     check
         move.l  frame0, %d0
         clr.w   %d0
-        move.l  #0x1FB40000, %d1
+        move.l  #(FRAME_BUSY << 16), %d1
         bsr     check
 
 | ---------------------------------------------------------------------------
@@ -158,7 +159,7 @@ _start:
         bsr     check                       | the interrupt was taken
         move.l  frame0, %d0
         clr.w   %d0
-        move.l  #0x1FB40000, %d1
+        move.l  #(FRAME_BUSY << 16), %d1
         bsr     check                       | busy: $B20C posted, not yet read
 
 | ---------------------------------------------------------------------------
@@ -179,7 +180,7 @@ _start:
         bsr     check
         move.l  frame0, %d0
         clr.w   %d0
-        move.l  #0x1F180000, %d1
+        move.l  #(FRAME_IDLE << 16), %d1
         bsr     check                       | idle: nothing in transfer
 
 | ---------------------------------------------------------------------------

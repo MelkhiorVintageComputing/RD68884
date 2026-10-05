@@ -19,7 +19,9 @@
 // adders, one right shifter shared with normalisation, the rounder, the
 // 64x16 multiplier, and the divide and square-root steps.
 
-module rd68884_seq (
+module rd68884_seq #(
+    parameter int MODEL = 68881            // 68881 (RD68884) or 68882 (RD68885)
+) (
     input  logic        clk,
     input  logic        rst_n,
 
@@ -72,12 +74,33 @@ module rd68884_seq (
   logic [rd68884_ucode_pkg::UA-1:0] addr_nxt;
   logic [rd68884_ucode_pkg::UW-1:0] uw;
 
-  rd68884_ucode_rom u_rom (
-      .clk  (clk),
-      .rst_n(rst_n),
-      .addr (addr_nxt),
-      .uw   (uw)
-  );
+  // The microcode store and the entry points of the model's program.
+  localparam logic [rd68884_ucode_pkg::UA-1:0] E_RESET =
+      (MODEL == 68882) ? rd68884_ucode_pkg::ENTRY82_RESET : rd68884_ucode_pkg::ENTRY_RESET;
+  localparam logic [rd68884_ucode_pkg::UA-1:0] E_ABORT =
+      (MODEL == 68882) ? rd68884_ucode_pkg::ENTRY82_ABORT : rd68884_ucode_pkg::ENTRY_ABORT;
+  localparam logic [rd68884_ucode_pkg::UA-1:0] E_RESTORE =
+      (MODEL == 68882) ? rd68884_ucode_pkg::ENTRY82_RESTORE : rd68884_ucode_pkg::ENTRY_RESTORE;
+  localparam logic [15:0] F_IDLE = (MODEL == 68882) ? rd68884_pkg::FRAME82_IDLE : rd68884_pkg::FRAME_IDLE;
+  localparam logic [15:0] F_BUSY = (MODEL == 68882) ? rd68884_pkg::FRAME82_BUSY : rd68884_pkg::FRAME_BUSY;
+
+  generate
+    if (MODEL == 68882) begin : g_rom82
+      rd68885_ucode_rom u_rom (
+          .clk  (clk),
+          .rst_n(rst_n),
+          .addr (addr_nxt),
+          .uw   (uw)
+      );
+    end else begin : g_rom81
+      rd68884_ucode_rom u_rom (
+          .clk  (clk),
+          .rst_n(rst_n),
+          .addr (addr_nxt),
+          .uw   (uw)
+      );
+    end
+  endgenerate
 
   logic [rd68884_ucode_pkg::F_SEQ_W-1:0] f_seq;
   logic [rd68884_ucode_pkg::F_NEG_W-1:0] f_neg;
@@ -188,9 +211,9 @@ module rd68884_seq (
   always_comb begin
     restore_rise = restore_req_i & ~restore_req_q;
     trap      = arch_reset_i | abort_i | restore_rise;
-    trap_addr = arch_reset_i ? rd68884_ucode_pkg::ENTRY_RESET :
-                abort_i      ? rd68884_ucode_pkg::ENTRY_ABORT :
-                               rd68884_ucode_pkg::ENTRY_RESTORE;
+    trap_addr = arch_reset_i ? E_RESET :
+                abort_i      ? E_ABORT :
+                               E_RESTORE;
   end
 
   logic [rd68884_ucode_pkg::UA-1:0] stack_top;
@@ -665,8 +688,8 @@ module rd68884_seq (
       rd68884_ucode_pkg::COND_BSUN:       cond_raw = bsun;
       rd68884_ucode_pkg::COND_BSUN_EN:    cond_raw = fpcr[15];
       rd68884_ucode_pkg::COND_REST_NULL:  cond_raw = (restore_word_i[15:8] == 8'h00);
-      rd68884_ucode_pkg::COND_REST_IDLE:  cond_raw = (restore_word_i == rd68884_pkg::FRAME_IDLE);
-      rd68884_ucode_pkg::COND_REST_BUSY:  cond_raw = (restore_word_i == rd68884_pkg::FRAME_BUSY);
+      rd68884_ucode_pkg::COND_REST_IDLE:  cond_raw = (restore_word_i == F_IDLE);
+      rd68884_ucode_pkg::COND_REST_BUSY:  cond_raw = (restore_word_i == F_BUSY);
       rd68884_ucode_pkg::COND_FLINE:      cond_raw = (opclass == 3'd1) |
                                                      (((opclass == 3'd0) | ((opclass == 3'd2) & (rx != 3'd7))) & cmd[6]);
       rd68884_ucode_pkg::COND_REPORTS:    cond_raw = (opclass == 3'd0) | (opclass == 3'd2) | (opclass == 3'd3);
@@ -1091,7 +1114,7 @@ module rd68884_seq (
   // ==========================================================================
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      upc           <= rd68884_ucode_pkg::ENTRY_RESET;
+      upc           <= E_RESET;
       stack0        <= '0;
       stack1        <= '0;
       stack2        <= '0;

@@ -5,8 +5,12 @@
 
 """The micro-assembler.
 
-    python3 tools/ucode/asm.py           # regenerate rtl/gen/ and build/ucode.json
+    python3 tools/ucode/asm.py           # regenerate rtl/gen/ and build/ucode*.json
     python3 tools/ucode/asm.py --check   # fail if rtl/gen/ is stale
+
+The program is assembled twice, once per model (doc/rd68885.md): the MC68881
+(RD68884) and the MC68882 (RD68885). program.build(model) sees the model as
+p.model; the field table and the constant ROM are shared.
 
 The program (tools/ucode/program.py) is Python: L('label') places a label,
 u(SEQ='BR', COND='CMD_PEND', IMM='cmd', ...) one microinstruction, and
@@ -15,13 +19,17 @@ placed at an address whose low `bits` bits are zero. IMM may be a label.
 
 Outputs:
   rtl/gen/rd68884_ucode_pkg.sv   field positions, enumerations, entry points
+                                 (ENTRY_* for the MC68881, ENTRY82_* for the
+                                 MC68882)
   rtl/gen/rd68884_ucode_rom.sv   the store, a registered case ROM indexed only
                                  by the address bits in use (the RD68021
                                  technique: Quartus builds a sparse case from
                                  logic)
   rtl/gen/rd68884_crom.sv        the constant ROM (tools/ucode/crom.py)
+  rtl/gen/rd68885_ucode_rom.sv   the MC68882's store, the same way
   build/ucode.json               the words, labels and comments, and the
-                                 constant ROM, for the ISS
+                                 constant ROM, for the ISS (ucode-68882.json:
+                                 the MC68882's)
 """
 
 import argparse
@@ -48,7 +56,8 @@ BANNER = """// SPDX-License-Identifier: CERN-OHL-S-2.0
 
 
 class Program:
-    def __init__(self):
+    def __init__(self, model=68881):
+        self.model = model      # 68881 or 68882: which program to emit
         self.code = []          # (fields dict, comment, labels at this word)
         self.pending = []
         self.tables = []        # (name, bits, mapping, default)
@@ -112,7 +121,7 @@ class Program:
 ENTRIES = ['reset', 'abort', 'restore', 'illegal']
 
 
-def gen_pkg(labels, width):
+def gen_pkg(labels, width, labels82=None):
     lay, _ = fields.layout()
     o = [BANNER, '// The microword layout and the micro-addresses the sequencer jumps to', '// by itself (doc/microcode.md).', '',
          'package rd68884_ucode_pkg;', '']
@@ -129,16 +138,21 @@ def gen_pkg(labels, width):
     for e in ENTRIES:
         o.append(f"  localparam logic [{fields.UADDR_BITS - 1}:0] ENTRY_{e.upper()} = "
                  f"{fields.UADDR_BITS}'d{labels[e]};")
+    if labels82 is not None:
+        o.append('  // The MC68882 program (RD68885)')
+        for e in ENTRIES:
+            o.append(f"  localparam logic [{fields.UADDR_BITS - 1}:0] ENTRY82_{e.upper()} = "
+                     f"{fields.UADDR_BITS}'d{labels82[e]};")
     o += ['', 'endpackage', '']
     return '\n'.join(o)
 
 
-def gen_rom(words, labels, width):
+def gen_rom(words, labels, width, name='rd68884_ucode_rom', what=''):
     ua = fields.UADDR_BITS
     iw = max(1, (len(words) - 1).bit_length())
     hw = (width + 3) // 4
     illegal = words[labels['illegal']][0]
-    o = [BANNER, f"""// The microcode store, {len(words)} words of {width} bits.
+    o = [BANNER, f"""// The {what}microcode store, {len(words)} words of {width} bits.
 //
 // Read at `addr`, which the sequencer drives with the NEXT micro-address, and
 // registered, so the word arrives with the micro-address it belongs to.
@@ -152,7 +166,7 @@ def gen_rom(words, labels, width):
 // Indexed by the low {iw} bits only; a higher micro-address -- reachable by no
 // program path -- selects the illegal entry through a flag registered with the
 // read, so the function is that of the full case (the RD68021 technique).
-module rd68884_ucode_rom (
+module {name} (
     input  logic          clk,
     input  logic          rst_n,
     input  logic [{ua - 1}:0]   addr,
@@ -234,10 +248,10 @@ endmodule
     return '\n'.join(o)
 
 
-def build():
+def build(model=68881):
     sys.path.insert(0, HERE)
     import program  # noqa: E402
-    p = program.build()
+    p = program.build(model)
     words, labels, width = p.assemble()
     for e in ENTRIES:
         assert e in labels, f'no entry point {e}'
@@ -248,29 +262,34 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--check', action='store_true')
     a = ap.parse_args()
-    words, labels, width = build()
-    files = {os.path.join(GEN, 'rd68884_ucode_pkg.sv'): gen_pkg(labels, width),
-             os.path.join(GEN, 'rd68884_ucode_rom.sv'): gen_rom(words, labels, width)}
+    words, labels, width = build(68881)
+    words82, labels82, width82 = build(68882)
+    assert width82 == width
+    files = {os.path.join(GEN, 'rd68884_ucode_pkg.sv'): gen_pkg(labels, width, labels82),
+             os.path.join(GEN, 'rd68884_ucode_rom.sv'): gen_rom(words, labels, width),
+             os.path.join(GEN, 'rd68885_ucode_rom.sv'):
+                 gen_rom(words82, labels82, width, 'rd68885_ucode_rom', 'MC68882 (RD68885) ')}
     ctab = crom.entries()
     files[os.path.join(GEN, 'rd68884_crom.sv')] = gen_crom(ctab)
     os.makedirs(os.path.join(ROOT, 'build'), exist_ok=True)
-    with open(os.path.join(ROOT, 'build', 'ucode.json'), 'w') as fh:
-        json.dump({'width': width, 'words': [w for w, _ in words],
-                   'comments': [c for _, c in words], 'labels': labels,
-                   'crom': [list(e) for e in ctab]}, fh)
+    for fn, (w_, l_) in (('ucode.json', (words, labels)), ('ucode-68882.json', (words82, labels82))):
+        with open(os.path.join(ROOT, 'build', fn), 'w') as fh:
+            json.dump({'width': width, 'words': [w for w, _ in w_],
+                       'comments': [c for _, c in w_], 'labels': l_,
+                       'crom': [list(e) for e in ctab]}, fh)
     if a.check:
         stale = [f for f, t in files.items()
                  if not os.path.exists(f) or open(f).read() != t]
         if stale:
             print('FAIL: ucode-check, stale: ' + ' '.join(os.path.relpath(f, ROOT) for f in stale))
             return 1
-        print(f'  ucode: {len(words)} words of {width} bits, generated files current')
+        print(f'  ucode: {len(words)} words (MC68882: {len(words82)}) of {width} bits, generated files current')
         return 0
     os.makedirs(GEN, exist_ok=True)
     for f, t in files.items():
         with open(f, 'w') as fh:
             fh.write(t)
-    print(f'  ucode: {len(words)} words of {width} bits')
+    print(f'  ucode: {len(words)} words (MC68882: {len(words82)}) of {width} bits')
     return 0
 
 

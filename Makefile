@@ -40,7 +40,8 @@ SRCS   := rtl/rd68884_sync.sv \
           rtl/rd68884_biu.sv \
           rtl/rd68884_regfile.sv \
           rtl/rd68884_seq.sv \
-          rtl/rd68884_top.sv
+          rtl/rd68884_top.sv \
+          rtl/rd68885_top.sv
 
 RTL := $(PKGS) $(GENPKG) $(GENSRC) $(SRCS)
 VLT := rtl/rd68884.vlt
@@ -110,10 +111,13 @@ lint: lint-source lint-iverilog lint-verilator lint-yosys
 # builds whatever these say; the other targets build the one they name.
 BUS_SYNC      ?= 0
 BUS_SYNC_WAIT ?= 0
-# BUS_SYNC:BUS_SYNC_WAIT:DSACK_NEGATE -- the asynchronous BIU, the same-clock
-# one with no wait state and with one, and the asynchronous one negating
-# DSACK before it releases it (the IIsiA7 Mini's, doc/boards.md).
-BUILDS        := 0:0:0 1:0:0 1:1:0 0:0:1
+# The model: 68881 (RD68884) or 68882 (RD68885, doc/rd68885.md).
+MODEL         ?= 68881
+# BUS_SYNC:BUS_SYNC_WAIT:DSACK_NEGATE:MODEL -- the asynchronous BIU, the
+# same-clock one with no wait state and with one, and the asynchronous one
+# negating DSACK before it releases it (the IIsiA7 Mini's, doc/boards.md);
+# then the MC68882 (RD68885, doc/rd68885.md), plain and as the board builds it.
+BUILDS        := 0:0:0:68881 1:0:0:68881 1:1:0:68881 0:0:1:68881 0:0:0:68882 0:0:1:68882
 GENERICS      := BUS_SYNC=$(BUS_SYNC) BUS_SYNC_WAIT=$(BUS_SYNC_WAIT)
 
 # The same-clock BIU's pin timing, against the main processor's clock: its
@@ -154,19 +158,19 @@ NOTES := ': sorry: .*\(ignored\|all bits will be included\)\.$$'
 
 lint-iverilog: dirs
 	@for b in $(BUILDS); do \
-	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$${b##*:}; \
-	  iverilog $(IVFLAGS) -P $(TOP).BUS_SYNC=$$bs -P $(TOP).BUS_SYNC_WAIT=$$bw -P $(TOP).DSACK_NEGATE=$$bn \
+	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$$(echo $$b | cut -d: -f3); bm=$${b##*:}; \
+	  iverilog $(IVFLAGS) -P $(TOP).BUS_SYNC=$$bs -P $(TOP).BUS_SYNC_WAIT=$$bw -P $(TOP).DSACK_NEGATE=$$bn -P $(TOP).MODEL=$$bm \
 	    -o $(BUILD)/$(TOP).vvp -s $(TOP) $(RTL) > $(BUILD)/iverilog.log 2>&1 \
-	  || { echo "BUS_SYNC:WAIT:NEGATE $$b"; grep -v $(NOTES) $(BUILD)/iverilog.log; exit 1; }; \
+	  || { echo "BUS_SYNC:WAIT:NEGATE:MODEL $$b"; grep -v $(NOTES) $(BUILD)/iverilog.log; exit 1; }; \
 	done
 	@echo "  iverilog: ok"
 
 lint-verilator: dirs
 	@for b in $(BUILDS); do \
-	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$${b##*:}; \
-	  verilator --lint-only -Wall --top-module $(TOP) -GBUS_SYNC=$$bs -GBUS_SYNC_WAIT=$$bw -GDSACK_NEGATE=$$bn \
+	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$$(echo $$b | cut -d: -f3); bm=$${b##*:}; \
+	  verilator --lint-only -Wall --top-module $(TOP) -GBUS_SYNC=$$bs -GBUS_SYNC_WAIT=$$bw -GDSACK_NEGATE=$$bn -GMODEL=$$bm \
 	    $(VLT) $(RTL) > $(BUILD)/verilator.log 2>&1 \
-	  || { echo "BUS_SYNC:WAIT:NEGATE $$b"; grep -v '^- V e r i l a t i o n\|^- Verilator:' $(BUILD)/verilator.log; exit 1; }; \
+	  || { echo "BUS_SYNC:WAIT:NEGATE:MODEL $$b"; grep -v '^- V e r i l a t i o n\|^- Verilator:' $(BUILD)/verilator.log; exit 1; }; \
 	done
 	@echo "  verilator: ok"
 
@@ -175,13 +179,13 @@ lint-verilator: dirs
 # register driven from two processes, and an inferred latch. Both are gates here.
 lint-yosys: dirs
 	@set -o pipefail; for b in $(BUILDS); do \
-	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$${b##*:}; \
+	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$$(echo $$b | cut -d: -f3); bm=$${b##*:}; \
 	  yosys -p "read_verilog -sv $(RTL); \
-	    chparam -set BUS_SYNC $$bs -set BUS_SYNC_WAIT $$bw -set DSACK_NEGATE $$bn $(TOP); synth -top $(TOP); \
+	    chparam -set BUS_SYNC $$bs -set BUS_SYNC_WAIT $$bw -set DSACK_NEGATE $$bn -set MODEL $$bm $(TOP); synth -top $(TOP); \
 	    write_verilog $(BUILD)/$(TOP)_yosys.v" > $(BUILD)/yosys.log 2>&1 \
-	  || { echo "BUS_SYNC:WAIT:NEGATE $$b"; tail -40 $(BUILD)/yosys.log; exit 1; }; \
+	  || { echo "BUS_SYNC:WAIT:NEGATE:MODEL $$b"; tail -40 $(BUILD)/yosys.log; exit 1; }; \
 	  if grep -q 'multiple conflicting drivers\|Warning: Identifier .* is implicitly declared\|inferring latch' $(BUILD)/yosys.log; then \
-	    echo "FAIL: yosys, BUS_SYNC:WAIT:NEGATE $$b"; \
+	    echo "FAIL: yosys, BUS_SYNC:WAIT:NEGATE:MODEL $$b"; \
 	    grep -n 'multiple conflicting drivers\|implicitly declared\|inferring latch' $(BUILD)/yosys.log | head -20; \
 	    exit 1; fi; \
 	done
@@ -192,9 +196,9 @@ lint-yosys: dirs
 # ---------------------------------------------------------------------------
 audit: dirs
 	@for b in $(BUILDS); do \
-	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$${b##*:}; \
+	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$$(echo $$b | cut -d: -f3); bm=$${b##*:}; \
 	  python3 tools/reset_audit.py --top $(TOP) --build $(BUILD) \
-	    --param BUS_SYNC=$$bs --param BUS_SYNC_WAIT=$$bw --param DSACK_NEGATE=$$bn $(RTL) || exit 1; \
+	    --param BUS_SYNC=$$bs --param BUS_SYNC_WAIT=$$bw --param DSACK_NEGATE=$$bn --param MODEL=$$bm $(RTL) || exit 1; \
 	done
 	@# The board tops: their primitives are the vendor's, so the source only.
 	@python3 tools/reset_audit.py --source-only boards/*/*_top.sv
@@ -276,10 +280,11 @@ TBS := $(filter-out sys_tb,$(patsubst sim/tb/%.sv,%,$(wildcard sim/tb/*_tb.sv)))
 
 sim: dirs
 	@ok=1; for tb in $(TBS); do for b in $(BUILDS); do \
-	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$${b##*:}; \
+	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$$(echo $$b | cut -d: -f3); bm=$${b##*:}; \
 	  def=""; [ $$bs = 1 ] && def="-DBIU_SYNC -DBIU_SYNC_WAIT=$$bw"; \
 	  [ $$bn = 1 ] && def="$$def -DBIU_NEGATE"; \
-	  l=$(BUILD)/$$tb-$$bs$$bw$$bn; \
+	  [ $$bm = 68882 ] && def="$$def -DBIU_MODEL=68882"; \
+	  l=$(BUILD)/$$tb-$$bs$$bw$$bn-$$bm; \
 	  iverilog $(IVFLAGS) $$def -I sim/tb -o $$l.vvp -s $$tb $(RTL) sim/tb/$$tb.sv \
 	    > $$l.clog 2>&1 || { grep -v $(NOTES) $$l.clog; ok=0; continue; }; \
 	  vvp $$l.vvp > $$l.log 2>&1; \
@@ -288,7 +293,7 @@ sim: dirs
 	  elif ! grep -q '^PASS' $$l.log; then \
 	    echo "FAIL: $$tb reported no PASS"; tail -20 $$l.log; ok=0; \
 	  else \
-	    echo "  $$(grep -E '^PASS' $$l.log | head -1), BUS_SYNC:WAIT:NEGATE $$b"; \
+	    echo "  $$(grep -E '^PASS' $$l.log | head -1), BUS_SYNC:WAIT:NEGATE:MODEL $$b"; \
 	  fi; \
 	done; done; test $$ok -eq 1 && echo "PASS: sim"
 
@@ -325,7 +330,8 @@ CROSS   := m68k-linux-gnu-
 # sys_tb with the BIU this build names: the FPU on its own clock, or on the CPU's.
 # BOARD=iisia7: the IIsiA7 Mini's whole board top instead (doc/boards.md), on
 # a 32-bit port.
-SYSDEF := $(if $(filter 1,$(BUS_SYNC)),-DSYS_BUS_SYNC -DSYS_BUS_SYNC_WAIT=$(BUS_SYNC_WAIT))
+SYSDEF := $(if $(filter 1,$(BUS_SYNC)),-DSYS_BUS_SYNC -DSYS_BUS_SYNC_WAIT=$(BUS_SYNC_WAIT)) \
+          $(if $(filter 68882,$(MODEL)),-DSYS_MODEL=68882)
 BOARD  ?=
 ifeq ($(BOARD),iisia7)
 SYSDEF    += -DSYS_BOARD_IISIA7
@@ -347,9 +353,9 @@ $(BUILD)/programs/fpu_m7_vec.S: sim/programs/gen_fpu_m7.py sim/programs/gen_fpu_
                                 build/ucode.json | dirs
 	@mkdir -p $(BUILD)/programs
 	@$(PYENV):$(CURDIR)/sim/programs python3 sim/programs/gen_fpu_m7.py $@ 100 7
-$(BUILD)/programs/fpu_m5.hex: $(BUILD)/programs/fpu_m5_vec.S sim/programs/arith_harness.inc
-$(BUILD)/programs/fpu_m6.hex: $(BUILD)/programs/fpu_m6_vec.S sim/programs/arith_harness.inc
-$(BUILD)/programs/fpu_m7.hex: $(BUILD)/programs/fpu_m7_vec.S sim/programs/arith_harness.inc
+$(BUILD)/programs/fpu_m5.hex $(BUILD)/programs/fpu_m5-68882.hex: $(BUILD)/programs/fpu_m5_vec.S sim/programs/arith_harness.inc
+$(BUILD)/programs/fpu_m6.hex $(BUILD)/programs/fpu_m6-68882.hex: $(BUILD)/programs/fpu_m6_vec.S sim/programs/arith_harness.inc
+$(BUILD)/programs/fpu_m7.hex $(BUILD)/programs/fpu_m7-68882.hex: $(BUILD)/programs/fpu_m7_vec.S sim/programs/arith_harness.inc
 
 # fparith.c (copied from RD68021), twice: at extended rounding precision
 # against the host's x87, and at double against its SSE (the comment at its
@@ -382,13 +388,27 @@ $(BUILD)/programs/fparith-dbl.expect: sim/programs/fparith.c | dirs
 	@cc $(FPARITHCC) -mfpmath=sse -o $(BUILD)/programs/fparith-dbl-host $< -lm
 	@$(BUILD)/programs/fparith-dbl-host > $@ 2> $(BUILD)/programs/fparith-dbl.exact
 
+# The assembly programs are built once per model: what differs is the state
+# frames' format words and sizes (FRAME_IDLE, FRAME_BUSY, IDLE_SIZE), which a
+# few checks compare. The C programs do not depend on the model.
+FRAMESYM_68881 := --defsym FRAME_IDLE=0x1F18 --defsym FRAME_BUSY=0x1FB4 --defsym IDLE_SIZE=0x18
+FRAMESYM_68882 := --defsym FRAME_IDLE=0x1F38 --defsym FRAME_BUSY=0x1FD4 --defsym IDLE_SIZE=0x38
+$(BUILD)/programs/%-68882.hex: sim/programs/%.S sim/programs/flat.ld | dirs
+	@mkdir -p $(BUILD)/programs
+	@$(CROSS)as -mcpu=68020 -m68881 $(FRAMESYM_68882) -I $(BUILD)/programs -I sim/programs -o $(BUILD)/programs/$*-68882.o $<
+	@$(CROSS)ld --no-warn-rwx-segments -T sim/programs/flat.ld -o $(BUILD)/programs/$*-68882.elf $(BUILD)/programs/$*-68882.o
+	@$(CROSS)objcopy -O verilog --verilog-data-width=1 $(BUILD)/programs/$*-68882.elf $@
 $(BUILD)/programs/%.hex: sim/programs/%.S sim/programs/flat.ld | dirs
 	@mkdir -p $(BUILD)/programs
-	@$(CROSS)as -mcpu=68020 -m68881 -I $(BUILD)/programs -I sim/programs -o $(BUILD)/programs/$*.o $<
+	@$(CROSS)as -mcpu=68020 -m68881 $(FRAMESYM_68881) -I $(BUILD)/programs -I sim/programs -o $(BUILD)/programs/$*.o $<
 	@$(CROSS)ld --no-warn-rwx-segments -T sim/programs/flat.ld -o $(BUILD)/programs/$*.elf $(BUILD)/programs/$*.o
 	@$(CROSS)objcopy -O verilog --verilog-data-width=1 $(BUILD)/programs/$*.elf $@
 
-sys: ucode-check rd68021 $(patsubst %,$(BUILD)/programs/%.hex,$(SYSPROGS))
+# MODEL=68882: RD68885 (doc/rd68885.md), its programs' -68882 builds.
+PSUF  := $(if $(filter 68882,$(MODEL)),-68882)
+SYSHEX := $(foreach p,$(SYSPROGS),$(if $(filter fparith fparith-dbl,$(p)),$(BUILD)/programs/$(p).hex,$(BUILD)/programs/$(p)$(PSUF).hex))
+
+sys: ucode-check rd68021 $(SYSHEX)
 	@rd="$$(cd $(RDSRC) && $(MAKE) -s print-rtl | sed 's#\(\S*\)#$(RDSRC)/\1#g')"; \
 	ok=1; for port in $(SYS_PORTS); do \
 	  iverilog $(IVFLAGS) -DSYS_PORT=$$port $(SYSDEF) -o $(BUILD)/sys_tb_$$port.vvp -s sys_tb \
@@ -397,7 +417,8 @@ sys: ucode-check rd68021 $(patsubst %,$(BUILD)/programs/%.hex,$(SYSPROGS))
 	  for p in $(SYSPROGS); do \
 	    ls=""; if [ $$port = 32 ]; then ls="+lockstep=$(BUILD)/sys-$$p.lockstep"; fi; \
 	    dp=""; if [ -f $(BUILD)/programs/$$p.expect ]; then dp="+dump=$(BUILD)/sys-$$p-$$port.dump"; fi; \
-	    vvp $(BUILD)/sys_tb_$$port.vvp +image=$(BUILD)/programs/$$p.hex +limit=4000000 $$ls $$dp \
+	    img=$(BUILD)/programs/$$p$(PSUF).hex; [ -f $$img ] || img=$(BUILD)/programs/$$p.hex; \
+	    vvp $(BUILD)/sys_tb_$$port.vvp +image=$$img +limit=4000000 $$ls $$dp \
 	      > $(BUILD)/sys-$$p-$$port.log 2>&1; \
 	    if grep -q '^PASS' $(BUILD)/sys-$$p-$$port.log; then \
 	      echo "  $$p, $$port-bit port: $$(grep '^PASS' $(BUILD)/sys-$$p-$$port.log)"; \
@@ -410,7 +431,7 @@ sys: ucode-check rd68021 $(patsubst %,$(BUILD)/programs/%.hex,$(SYSPROGS))
 	      grep -q '^PASS' $(BUILD)/sys-$$p-$$port.cmp || ok=0; \
 	    fi; \
 	    if [ $$port = 32 ]; then \
-	      $(PYENV) python3 tools/iss/lockstep.py $(BUILD)/sys-$$p.lockstep | sed 's/^/  /' || ok=0; \
+	      $(PYENV) python3 tools/iss/lockstep.py $(BUILD)/sys-$$p.lockstep --model $(MODEL) | sed 's/^/  /' || ok=0; \
 	    fi; \
 	  done; \
 	done; test $$ok -eq 1 && echo "PASS: sys"
@@ -599,9 +620,9 @@ quartus: dirs
 
 lint-questa: dirs
 	@for b in $(BUILDS); do \
-	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$${b##*:}; \
-	  QUESTA_G="-GBUS_SYNC=$$bs -GBUS_SYNC_WAIT=$$bw -GDSACK_NEGATE=$$bn" scripts/questa.sh $(BUILD) $(TOP) $(RTL) \
-	    || { echo "BUS_SYNC:WAIT:NEGATE $$b"; exit 1; }; \
+	  bs=$${b%%:*}; bw=$$(echo $$b | cut -d: -f2); bn=$$(echo $$b | cut -d: -f3); bm=$${b##*:}; \
+	  QUESTA_G="-GBUS_SYNC=$$bs -GBUS_SYNC_WAIT=$$bw -GDSACK_NEGATE=$$bn -GMODEL=$$bm" scripts/questa.sh $(BUILD) $(TOP) $(RTL) \
+	    || { echo "BUS_SYNC:WAIT:NEGATE:MODEL $$b"; exit 1; }; \
 	done
 	@echo "  questa: ok"
 

@@ -5,7 +5,7 @@
 
 """The RTL sequencer against the ISS, clock by clock.
 
-    python3 tools/iss/lockstep.py build/sys-lockstep.log
+    python3 tools/iss/lockstep.py build/sys-lockstep.log [--model 68882]
 
 sim/tb/sys_tb.sv (+lockstep=FILE) records, at every FPU clock, what the BIU
 drove into rd68884_seq and what rd68884_seq drove back, and its micro-address.
@@ -47,9 +47,9 @@ def parse(tok):
 
 def main():
     path = sys.argv[1]
-    words, labels, comments = load()
-    Core.labels = labels
-    core = Core(words)
+    model = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[2] == '--model' else 68881
+    words, labels, comments = load(model)
+    core = Core(words, labels=labels, model=model)
     inv = {v: k for k, v in labels.items()}
 
     def where(a):

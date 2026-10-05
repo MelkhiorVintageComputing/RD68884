@@ -19,10 +19,19 @@ from busy import bwait, opw_replay, opr_replay
 
 ETEMP = 8          # register file entry of the exceptional operand
 
+# The state frames' format words and lengths in long words after the format
+# word (FPU 6.4.2, figure 6-5, table 6-6). The MC68882's carry 8 long words of
+# conversion-unit state after the command word, so its idle frame is $38 bytes
+# and its busy frame $D4 (doc/rd68885.md).
+FRAMES = {68881: dict(idle=0x1F18, idle_n=6, busy=0x1FB4, busy_n=45, cu_n=0),
+          68882: dict(idle=0x1F38, idle_n=14, busy=0x1FD4, busy_n=53, cu_n=8)}
 
-def build():
-    p = Program()
+
+def build(model=68881):
+    """The program for the MC68881 (RD68884) or the MC68882 (RD68885)."""
+    p = Program(model)
     L, u = p.L, p.u
+    fr = FRAMES[model]
 
     # =========================================================================
     # Reset: power-on, the RESET pin, and FRESTORE of a null frame
@@ -205,8 +214,10 @@ def build():
     L('save_frame')
     u(RF='READ', RFA='ETEMP')
     u(ASRC='RFQ')
-    u(XOP='PACKX', TSRC='IMM', IMM=0x1F18, BIU='SAVE_WR', XFER=6, comment='idle frame')
-    for src in ('FLAGS', 'ONES', 'XI2', 'XI1', 'XI0', 'CMDW'):
+    u(XOP='PACKX', TSRC='IMM', IMM=fr['idle'], BIU='SAVE_WR', XFER=fr['idle_n'], comment='idle frame')
+    # The MC68882's conversion-unit state sits between the exceptional operand
+    # and the command word (figure 6-5).
+    for src in ('FLAGS', 'ONES', 'XI2', 'XI1', 'XI0') + ('ONES',) * fr['cu_n'] + ('CMDW',):
         u(TSRC=src, BIU='OPR_WR', comment='highest address first' if src == 'FLAGS' else '')
         u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
     u(FLAG='CLR_EXC', comment='FPU 6.4.3: idle, no pending exceptions')
@@ -228,8 +239,8 @@ def build():
     L('rest_null')
     u(TSRC='RESTW', BIU='RESTORE_WR', XFER=0, SEQ='JUMP', TGT='reset')
     L('rest_idle')
-    u(TSRC='RESTW', BIU='RESTORE_WR', XFER=6)
-    for dst in ('CMD', 'XI0', 'XI1', 'XI2', 'NONE', 'FLAGS'):
+    u(TSRC='RESTW', BIU='RESTORE_WR', XFER=fr['idle_n'])
+    for dst in ('CMD',) + ('NONE',) * fr['cu_n'] + ('XI0', 'XI1', 'XI2', 'NONE', 'FLAGS'):
         u(SEQ='WAIT', COND='OPW_VALID')
         u(BIU='OPW_ACK', TSRC='OPW', TDST=dst)
     u(ASRC='UNPACKX', FLAG='CLR_NULL')

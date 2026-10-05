@@ -5,6 +5,7 @@
 """The microcoded FPU, driven at the level of CIR accesses.
 
     m = Machine()                   # reads build/ucode.json
+    m = Machine(model=68882)        # RD68885: build/ucode-68882.json
     m.write(CIR_COMMAND, cmd); m.read(CIR_RESPONSE)
 
 Same interface as tools/model/cpif.FPU881, so tools/model/mpu.py drives both
@@ -23,8 +24,12 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 UCODE = os.path.join(ROOT, 'build', 'ucode.json')
 
 
-def load():
-    with open(UCODE) as fh:
+def ucode_path(model=68881):
+    return os.path.join(ROOT, 'build', 'ucode-68882.json' if model == 68882 else 'ucode.json')
+
+
+def load(model=68881):
+    with open(ucode_path(model)) as fh:
         j = json.load(fh)
     return j['words'], j['labels'], j.get('comments', [])
 
@@ -33,11 +38,11 @@ class Machine:
     BUS_CLOCKS = 4          # core clocks a bus cycle takes before it can complete
     MAX_WAIT = 20000
 
-    def __init__(self):
-        words, labels, self.comments = load()
-        Core.labels = labels
-        self.core = Core(words)
-        self.biu = Biu()
+    def __init__(self, model=68881):
+        self.model = model
+        words, labels, self.comments = load(model)
+        self.core = Core(words, labels=labels, model=model)
+        self.biu = Biu(model=model)
         self.clocks = 0
         self.log = []
         self.trace = None

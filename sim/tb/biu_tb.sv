@@ -35,6 +35,11 @@
 
 `timescale 1ns / 1ps
 
+// BIU_MODEL: 68881 (the default) or 68882 (RD68885, doc/rd68885.md).
+`ifndef BIU_MODEL
+`define BIU_MODEL 68881
+`endif
+
 `ifdef BIU_SYNC
 `ifndef BIU_SYNC_WAIT
 `define BIU_SYNC_WAIT 0
@@ -91,11 +96,11 @@ module biu_tb;
   logic [31:0] opw_data, fpiar;
 
 `ifdef BIU_SYNC
-  rd68884_biu #(.BUS_SYNC(1), .BUS_SYNC_WAIT(`BIU_SYNC_WAIT)) dut (
+  rd68884_biu #(.BUS_SYNC(1), .BUS_SYNC_WAIT(`BIU_SYNC_WAIT), .MODEL(`BIU_MODEL)) dut (
 `elsif BIU_NEGATE
-  rd68884_biu #(.DSACK_NEGATE(1)) dut (
+  rd68884_biu #(.DSACK_NEGATE(1), .MODEL(`BIU_MODEL)) dut (
 `else
-  rd68884_biu dut (
+  rd68884_biu #(.MODEL(`BIU_MODEL)) dut (
 `endif
       .clk(clk), .rst_n(rst_n), .reset_n_i(reset_n),
       .cs_n_i(cs_n), .as_n_i(as_n), .ds_n_i(ds_n), .rw_i(rw),
@@ -804,6 +809,35 @@ module biu_tb;
     end
   endtask
 
+  // The control CIR (FPU 7.2.2). The MC68881 takes any write as an abort that
+  // also clears the exception. The MC68882 keeps a floating-point exception's
+  // primitive past an exception acknowledge (XA, $0002), aborts on AB ($0001),
+  // and acknowledges anything else (F-line here) as the MC68881 does.
+  task automatic t_control();
+    integer n0;
+    where = "control CIR";
+    seq_resp(16'h1C32, 0, E_RESP);                  // take pre-instruction, vector 50
+    n0 = n_abort;
+    wr(5'h02, 2, 32'h0002);                         // XA
+    idle(2);
+    if (`BIU_MODEL == 68882) begin
+      check(n_abort == n0, "MC68882: XA does not abort a floating-point exception");
+      rd_check(5'h00, 2, 32'h1C32, "MC68882: the exception stays reported");
+      wr(5'h02, 2, 32'h0001);                       // AB
+      idle(2);
+      check(n_abort == n0 + 1, "MC68882: AB aborts");
+    end else begin
+      check(n_abort == n0 + 1, "MC68881: any control write aborts");
+    end
+    rd_check(5'h00, 2, 32'h0802, "idle after the abort");
+    seq_resp(16'h1C0B, 0, E_RESP);                  // F-line
+    n0 = n_abort;
+    wr(5'h02, 2, 32'h0002);                         // XA
+    idle(2);
+    check(n_abort == n0 + 1, "XA clears an F-line on either model");
+    rd_check(5'h00, 2, 32'h0802, "idle after the F-line acknowledge");
+  endtask
+
   task automatic t_arch_reset();
     where = "reset";
     seq_resp(16'h9504, 1, E_OPW);
@@ -944,6 +978,7 @@ module biu_tb;
         t_instaddr();
         t_split_read();
         t_m4();
+        t_control();
         t_arch_reset();
       end
     end

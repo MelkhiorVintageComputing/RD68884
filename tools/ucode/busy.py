@@ -21,10 +21,12 @@ goes on waiting. The frame is our own layout -- the manual leaves it opaque
 
     received first  SEQST (the token, MASK, RN, IS_COND, EXC_PEND, events)
                     the command word
+                    (MC68882: 8 long words of conversion-unit state)
                     ETEMP, three long words (through XI)
                     XI0, XI1, XI2 (the operand being transferred)
                     the BIU flags
-    received last   36 long words of ones (45 in all: format word $1FB4)
+    received last   36 long words of ones (45 in all: format word $1FB4;
+                    53 and $1FD4 for the MC68882)
 """
 
 BUSY_PAD = 36
@@ -61,13 +63,15 @@ def opr_replay(src):
 
 def emit(p):
     L, u = p.L, p.u
+    from program import FRAMES
+    fr = FRAMES[p.model]
 
     # FSAVE with a transfer in progress. A protocol violation pending makes
     # an idle frame instead, as the model has it (doc/model.md).
     L('busy_save')
     u(SEQ='BR', COND='PV', TGT='save_first')
     u(CTR='LOAD', IMM=BUSY_PAD - 1)
-    u(TSRC='IMM', IMM=0x1FB4, BIU='SAVE_WR', XFER=45, comment='busy frame')
+    u(TSRC='IMM', IMM=fr['busy'], BIU='SAVE_WR', XFER=fr['busy_n'], comment='busy frame')
     L('bs_pad')
     u(TSRC='ONES', BIU='OPR_WR')
     u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
@@ -78,7 +82,7 @@ def emit(p):
     u(RF='READ', RFA='ETEMP')
     u(ASRC='RFQ')
     u(XOP='PACKX')
-    for src in ('XI2', 'XI1', 'XI0'):
+    for src in ('XI2', 'XI1', 'XI0') + ('ONES',) * fr['cu_n']:
         u(TSRC=src, BIU='OPR_WR')
         u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
     u(FLAG='PEND_CMD')
@@ -91,11 +95,14 @@ def emit(p):
 
     # FRESTORE of a busy frame.
     L('rest_busy')
-    u(TSRC='RESTW', BIU='RESTORE_WR', XFER=45)
+    u(TSRC='RESTW', BIU='RESTORE_WR', XFER=fr['busy_n'])
     u(SEQ='WAIT', COND='OPW_VALID')
     u(BIU='OPW_ACK', TSRC='OPW', TDST='SEQST', comment='pushes the resume address')
     u(SEQ='WAIT', COND='OPW_VALID')
     u(BIU='OPW_ACK', TSRC='OPW', TDST='CMD')
+    for _ in range(fr['cu_n']):
+        u(SEQ='WAIT', COND='OPW_VALID')
+        u(BIU='OPW_ACK')
     for k in range(3):
         u(SEQ='WAIT', COND='OPW_VALID')
         u(BIU='OPW_ACK', TSRC='OPW', TDST=f'XI{k}')

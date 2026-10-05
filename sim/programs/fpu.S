@@ -7,9 +7,10 @@
 | sim/programs/fpu.S and adapted:
 |   check 1  the null frame's format word: only its version byte is checked.
 |            The size byte is undefined (FPU 6.4.2); RD68884's is $18
-|            (doc/model.md), mh882's $00.
-|   check 46 the idle frame's size: $18, an MC68881's (FPU figure 6-4), where
-|            mh882, an MC68882, has $38.
+|            (doc/model.md).
+|   check 46 the idle frame's size: $18, an MC68881's (FPU figure 6-4), or $38
+|            when built for an MC68882 (RD68885; IDLE_SIZE, the Makefile's
+|            FRAMESYM_*).
 |
 | Every operand is chosen so that the exact result is representable: any
 | correct MC68881/MC68882 gives the same bits, and the program checks them
@@ -277,8 +278,8 @@ here:   fadd.x  %fp1, %fp1              | exception enabled (MC68881 UM 2.4)
         fmove.l #77, %fp0
         fsave   -(%sp)
         move.l  (%sp), %d0
-        andi.l  #0x00FF0000, %d0        | the frame's size: $18 on an MC68881
-        ck      46, 0x00180000, %d0
+        andi.l  #0x00FF0000, %d0        | the frame's size: $18 on an MC68881, $38 on an MC68882
+        ck      46, (IDLE_SIZE << 16), %d0
         fmove.l #0, %fp0
         frestore (%sp)+
         fmove.l %fp0, %d0               | the registers are not in the frame
