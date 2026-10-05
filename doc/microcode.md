@@ -38,6 +38,9 @@ A trap overrides the next micro-address and kills the current word's actions:
 | Reset | The RESET pin, while it is asserted | `reset` |
 | Abort | A control CIR write (FPU 7.2.2) | `abort` |
 | Restore | A rising restore request, i.e. a restore CIR write (FPU 7.2.4) | `restore` |
+| Abort, AB (RD68885) | A control CIR write with AB that ends the sequencer's own dialog (FPU 7.2.2). It keeps a pending exception | `abort_ab` |
+
+Every trap also clears `RUN` (RD68885, below).
 
 ## Events
 
@@ -59,6 +62,11 @@ Each of these was found by the differential tests. Each needs the BIU, because n
 | After FRESTORE of a frame with a pending instruction, the interrupted MPU re-reads the response before the microcode has rebuilt the first primitive | The restore CIR write itself sets the response to `$8900`. The restart path skips `CLEAR` |
 | On an 8-bit port the MPU reads the response in two byte cycles, and the microcode can write a new primitive between them, even in the clock of the first byte | The first byte snapshots the response, and a write after the snapshot marks it stale. The second byte then returns the snapshot and raises no read event, so a one-shot primitive the MPU has not seen is kept. A write in the clock of the first byte counts as after it (found by `fpu_m6` at M6) |
 | The same split read of the save CIR: begun while come-again, finished after the microcode posted the frame, it raises the save request again. The next read takes the frame, and the stale request then starts a second save nobody asked for | A save read that starts a frame also clears the request. Found by `fpu_m8` at M8, on the 8-bit port |
+| RD68885: a CA = 0 transfer is not followed by a response read, so the next command can come right after the last operand long word, before the microcode has taken it | The BIU counts the transfer's long words (`XFER` on the primitive's response write, `ca0`) and expects a command after the last (FPU 7.5.1) |
+| RD68885: the MPU reads a primitive asking for the PC in the clock the microcode rewrites the response, which masks the read event | The PC is expected from the value read, not from the event. Found by `fpu_m10` |
+| RD68885: the microcode posts its next primitive before the MPU has written the PC | While a PC is owed, a response write sets what is expected after the PC. Found by `fpu_m10` |
+| RD68885: the microcode's end-of-instruction write lands while the BIU is in the CU's dialog, or owed a PC | `RESP=WRC` also stands aside for these |
+| RD68885: the MPU reads the CU's first primitive in the clock of that end-of-instruction write. A write masks the read event, so the CU never saw its primitive read | Only a write that takes effect masks it; one that stands aside does not. Found by `fparith` |
 
 ## The value format
 
@@ -252,6 +260,24 @@ The checks:
   - bus errors on FMOVEM in and out, FMOVE.X out, FMOVE.D in and a control-register FMOVEM;
   - an interrupt while FMOVE.P out computes (a busy frame) and one while FMOD computes (an idle frame);
   - tracing through polling instructions.
+
+## The conversion unit (RD68885)
+
+The MC68882 build (doc/rd68885.md) adds the conversion unit to the BIU. It adds these microword values; the MC68881 program uses none of them, and its ROM keeps its bits:
+
+| Field | Value | What it does |
+|---|---|---|
+| `FLAG` | `SET_RUN`, `CLR_RUN` | `RUN`: the sequencer computes a released instruction, so the CU may take the next (the BIU's `apu_run`). Set where an instruction releases the main processor; cleared at `idle` and by every trap |
+| `COND` | `CU_READY` | The CU's instruction can go to the APU: its operand is in, its PC (if asked) written, and it is released or a B, W or L source |
+| `COND` | `CU_VALID`, `CU_MID` | The CU holds an instruction; its dialog is not over |
+| `COND` | `PCODE` | The pending code is set. FSAVE saves an unread take-exception primitive's instruction as pending (both builds) |
+| `BIU` | `CU_TAKE` | `CMD` and `XI` from the CU, its PC to FPIAR; a B, W or L source is released (`$0900`) |
+| `BIU` | `CU_RESUME` | After FRESTORE of a busy frame: the CU's dialog's response and expectation again |
+| `BIU` | `RELATCH` | `CMD` back into the command latch, with `$8900` |
+| `TSRC`, `TDST` | `CU` | The CU's frame word `IMM[2:0]` (doc/model.md): out for FSAVE, in for FRESTORE. Loading word 0 with ones empties the CU |
+| `XFER` | on a response write | The long words of a CA = 0 transfer |
+
+The paths are `cu_chk`, `cu_take` and the `t_cu`/`t_cufmt` tables, `cu_bsave` and `rest_relatch` in `program.py`, and `cu_rr`/`cu_mem` in `arith_ucode.py`. The MC68882's busy frame (`busy.py`) has the CU's eight long words first and the BIU flags last.
 
 ## The transcendentals (M7)
 

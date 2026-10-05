@@ -27,16 +27,23 @@ from iss.core import Core     # noqa: E402
 
 IN = ['arch_reset', 'cmd_pend', 'cmd_cond', 'cmd_word', 'opw_valid', 'opw_data',
       'opr_valid', 'save_req', 'restore_req', 'restore_word', 'fpiar', 'pv',
-      'resp_read', 'rsel_read', 'save_read', 'abort']
+      'resp_read', 'rsel_read', 'save_read', 'abort',
+      # RD68885's conversion unit (doc/rd68885.md)
+      'abort_ab', 'cu_ready', 'cu_valid', 'cu_mid', 'cu_word', 'cu_d0', 'cu_d1',
+      'cu_d2', 'cu_w0', 'cu_w1']
 OUT = ['resp_we', 'resp', 'resp_oneshot', 'expect', 'resp_cond', 'cmd_ack',
        'opw_ack', 'opr_we', 'opr', 'rsel_we', 'rsel', 'rsel_dir', 'save_we',
        'save', 'save_xfer', 'restore_we', 'restore', 'restore_xfer', 'fpiar_we',
-       'fpiar', 'clear']
+       'fpiar', 'clear',
+       'apu_run', 'pcen', 'resp_xfer', 'cu_take', 'cu_load', 'cu_idx', 'cu_data',
+       'cu_resume', 'relatch', 'relatch_word', 'relatch_cond']
 # value -> its strobe
 GATED = {'resp': 'resp_we', 'resp_oneshot': 'resp_we', 'expect': 'resp_we',
          'resp_cond': 'resp_we', 'opr': 'opr_we', 'rsel': 'rsel_we',
          'rsel_dir': 'rsel_we', 'save': 'save_we', 'save_xfer': 'save_we',
-         'restore': 'restore_we', 'restore_xfer': 'restore_we', 'fpiar': 'fpiar_we'}
+         'restore': 'restore_we', 'restore_xfer': 'restore_we', 'fpiar': 'fpiar_we',
+         'resp_xfer': 'resp_we', 'cu_idx': 'cu_load', 'cu_data': 'cu_load',
+         'relatch_word': 'relatch', 'relatch_cond': 'relatch'}
 
 
 def parse(tok):
@@ -61,6 +68,9 @@ def main():
         for line in fh:
             ins, outs, upc = line.split('|')
             b = dict(zip(IN, (parse(t) for t in ins.split())))
+            if b['cu_d0'] is not None:
+                b['cu_d'] = [b['cu_d0'], b['cu_d1'], b['cu_d2']]
+                b['cu_save'] = [b['cu_w0'], b['cu_w1']] + b['cu_d'] + [0xFFFFFFFF] * 3
             r = dict(zip(OUT, (parse(t) for t in outs.split())))
             rupc = parse(upc.strip())
             n += 1

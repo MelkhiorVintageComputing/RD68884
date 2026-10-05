@@ -326,7 +326,7 @@ def run(fpu, prog):
                     trail.append(('cond', m.fcond(word)))
                 break
             except CPException as e:
-                trail.append(('exc', e.vector, fpu.st.fpiar))
+                trail.append(('exc', e.vector, fpiar(fpu)))
                 handler(m)
                 if e.kind == 'mid' and kind != 'out':
                     m.resume(('predec', 6) if ea == 'mem' else ea)
@@ -335,10 +335,17 @@ def run(fpu, prog):
                     trail.append(('out', m.mem.read(m.a[5], F.FMT_BYTES[ea])))
                     break
     fpu.tick(1000)
-    st = fpu.st
-    return dict(regs=[st.fp[i].bits80() for i in range(8)], fpcr=st.fpcr,
-                fpsr=st.fpsr, a=list(m.a), trail=trail,
+    if hasattr(fpu, 'st'):
+        st = fpu.st
+        regs, ctl = [st.fp[i].bits80() for i in range(8)], (st.fpcr, st.fpsr)
+    else:                                       # the ISS (tools/iss/tests/test_overlap.py)
+        regs, ctl = [fpu.fp_bits80(i) for i in range(8)], (fpu.fpcr, fpu.fpsr)
+    return dict(regs=regs, fpcr=ctl[0], fpsr=ctl[1], a=list(m.a), trail=trail,
                 mem={k: v for k, v in m.mem.b.items() if k < 0x7000})   # not the frames
+
+
+def fpiar(fpu):
+    return fpu.st.fpiar if hasattr(fpu, 'st') else fpu.fpiar
 
 
 class Sequential(unittest.TestCase):

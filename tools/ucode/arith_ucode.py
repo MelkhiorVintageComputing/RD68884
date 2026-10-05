@@ -63,8 +63,9 @@ def emit(p):
     u(SEQ='DISP', IDX='OPCLASS', TGT='t_src')
 
     # ---- the source, FPm --------------------------------------------------
+    run = 'SET_RUN' if p.model == 68882 else 'NONE'     # rd68884_biu apu_run_i
     L('src_rr')
-    u(RESP='WR', IMM=0x0900, ORS='PC', EXPECT='CMD', RF='READ', RFA='RX',
+    u(RESP='WR', IMM=0x0900, ORS='PC', EXPECT='CMD', RF='READ', RFA='RX', FLAG=run,
       comment='null CA=0: release (PC if exceptions are enabled)')
     u(SEQ='WAIT', COND='RESP_READ', ASRC='RFQ',
       comment='the PC transfer, if asked, follows the read')
@@ -78,6 +79,20 @@ def emit(p):
                                   ('x', 0x960C, 3, 'UNPACKX'), ('w', 0x9502, 1, 'UNPACKW'),
                                   ('d', 0x9608, 2, 'UNPACKD'), ('b', 0x9501, 1, 'UNPACKB')):
         L(f'm_{fmt}')
+        if p.model == 68882 and fmt in ('s', 'd', 'x'):
+            # FPU figure 7-19: CA = 0. The main processor writes the operand
+            # and goes on; the BIU expects a command after the last long
+            # word (XFER), and the conversion unit may take it.
+            u(RESP='WR', IMM=prim & 0x7FFF, ORS='PC', ONESHOT=1, EXPECT='OPW', XFER=nl,
+              FLAG='SET_RUN', comment='evaluate <ea> and transfer data, CA=0')
+            u(SEQ='CALL', TGT='wait_first')
+            for k in range(nl):
+                bwait(p, 'OPW_VALID', False,
+                      [dict(RESP='WR', IMM=0x8900, EXPECT='OPW', XFER=nl - k)])
+                u(BIU='OPW_ACK', TSRC='OPW', TDST=f'XI{k}')
+            u(RESP='WRC', IMM=0x0900, EXPECT='CMD', ASRC=unpack, SEQ='JUMP', TGT='src_norm',
+              comment='released already; not over the CU\'s dialog')
+            continue
         u(RESP='WR', IMM=prim, ORS='PC', ONESHOT=1, EXPECT='OPW',
           comment='evaluate <ea> and transfer data')
         u(SEQ='CALL', TGT='wait_first')
@@ -85,20 +100,39 @@ def emit(p):
             bwait(p, 'OPW_VALID', False, opw_replay())
             u(BIU='OPW_ACK', TSRC='OPW', TDST=f'XI{k}')
         if unpack is None:
-            u(RESP='WR', IMM=0x0900, EXPECT='CMD', SEQ='JUMP', TGT='pin', comment='release')
-        else:
-            u(RESP='WR', IMM=0x0900, EXPECT='CMD', ASRC=unpack, SEQ='JUMP', TGT='src_norm',
+            u(RESP='WR', IMM=0x0900, EXPECT='CMD', FLAG=run, SEQ='JUMP', TGT='pin',
               comment='release')
+        else:
+            u(RESP='WR', IMM=0x0900, EXPECT='CMD', ASRC=unpack, FLAG=run, SEQ='JUMP',
+              TGT='src_norm', comment='release')
 
     # ---- FMOVECR, FPU 4.6: the constant, rounded as any result ----------
     L('movecr')
     u(PSR='FPCR', RMR='FPCR', FPSR='CLREXC', MOP='CLRQ')
-    u(RESP='WR', IMM=0x0900, ORS='PC', EXPECT='CMD', comment='as register to register')
+    u(RESP='WR', IMM=0x0900, ORS='PC', EXPECT='CMD', FLAG=run, comment='as register to register')
     u(RF='CROM', RFA='CMD', IMM=crom.CR_MOVECR)
     u(SEQ='WAIT', COND='RESP_READ', ASRC='RFQ', comment='STK <= the constant\'s sticky bit')
+    L('movecr_go')
     u(SEQ='BR', COND='A_ZERO', TGT='finish')
     u(SEQ='CALL', TGT='post')
     u(SEQ='JUMP', TGT='finish')
+
+    if p.model == 68882:
+        # The conversion unit's instruction (program.py cu_take): its
+        # dialog is over, its operand in XI. The MC68881's path from the
+        # unpacking on.
+        L('cu_rr')
+        u(RF='READ', RFA='RX')
+        u(ASRC='RFQ', SEQ='JUMP', TGT='src_norm')
+        L('cu_mem')
+        u(SEQ='DISP', IDX='RX', TGT='t_cufmt')
+        for fmt, unpack in (('l', 'UNPACKL'), ('s', 'UNPACKS'), ('x', 'UNPACKX'),
+                            ('w', 'UNPACKW'), ('d', 'UNPACKD'), ('b', 'UNPACKB')):
+            L(f'cu_{fmt}')
+            u(ASRC=unpack, SEQ='JUMP', TGT='src_norm')
+        L('cu_movecr')
+        u(RF='CROM', RFA='CMD', IMM=crom.CR_MOVECR)
+        u(ASRC='RFQ', SEQ='JUMP', TGT='movecr_go')
 
     # Normalise the source (FPU 3.5.1): denormals and unnormals; an
     # unnormalised zero becomes a true zero; an infinity drops its integer bit.
@@ -788,8 +822,9 @@ def emit(p):
     u(SEQ='BR', COND='TRAP', TGT='out_trap')
     u(RESP='WR', IMM=0x0802, EXPECT='CMD', SEQ='JUMP', TGT='idle')
     L('out_trap')
-    u(FLAG='SET_EXC', RESP='WR', IMM=0x1D00, ORS='VEC', EXPECT='RESP', SEQ='JUMP', TGT='idle',
-      comment='take mid-instruction exception')
+    u(FLAG='SET_EXC', RESP='WR', IMM=0x1D00, ORS='VEC',
+      EXPECT='CMD' if p.model == 68882 else 'RESP', SEQ='JUMP', TGT='idle',
+      comment='take mid-instruction exception' + (' (it persists)' if p.model == 68882 else ''))
 
     # =========================================================================
     # Tables
@@ -804,6 +839,9 @@ def emit(p):
                         if ALIAS.get(c, c) in OPS}, 'fline')
     p.table('t_src', 3, {0: 'src_rr', 2: 'src_mem'}, 'fline')
     p.table('t_memsrc', 3, {7: 'movecr'}, 'op_mem_g')
+    if p.model == 68882:
+        p.table('t_cufmt', 3, {0: 'cu_l', 1: 'cu_s', 2: 'cu_x', 4: 'cu_w', 5: 'cu_d',
+                               6: 'cu_b', 7: 'cu_movecr'}, 'illegal')
     p.table('t_memfmt', 3, {0: 'm_l', 1: 'm_s', 2: 'm_x', 3: 'm_p', 4: 'm_w', 5: 'm_d',
                             6: 'm_b'}, 'fline')
     p.table('t_outfmt', 3, {0: 'o_l', 1: 'o_s', 2: 'o_x', 3: 'o_p', 4: 'o_w', 5: 'o_d',

@@ -53,21 +53,58 @@ def build(model=68881):
     # BIU has already returned itself to idle.
     L('abort')
     u(FLAG='CLR_EXC', SEQ='JUMP', TGT='idle')
+    if model == 68882:
+        # The AB bit on the MC68882 (FPU 7.2.2): the instruction in its
+        # window ends; a pending exception stays.
+        L('abort_ab')
+        u(SEQ='JUMP', TGT='idle')
 
     # =========================================================================
     # Idle. A save request first: a command latched while the previous
     # instruction ran belongs in the frame (FPU 6.4.2.2, pending code 011).
     # =========================================================================
     L('idle')
+    if model == 68882:
+        # The conversion unit's instruction is older than a latched one:
+        # it goes first (doc/rd68885.md), before a save request too, so that
+        # FSAVE finds it done (FPU table 6-5, "end": come again, then idle).
+        u(FLAG='CLR_RUN', SEQ='BR', COND='CU_READY', TGT='cu_chk')
+    L('idle_s')
     u(SEQ='BR', COND='SAVE_REQ', TGT='save')
     u(SEQ='BR', COND='CMD_PEND', TGT='cmd')
     u(SEQ='JUMP', TGT='idle')
 
+    if model == 68882:
+        # An exception holds the CU's instruction (FPU 6.1). Still in its
+        # dialog, it reports it, mid-instruction; released, the next
+        # instruction reports it, pre-instruction (gen_pend). The report
+        # stays until FSAVE takes the CU's instruction away, or AB does.
+        L('cu_chk')
+        u(SEQ='BR', NEG=1, COND='EXC_PEND', TGT='cu_take')
+        u(SEQ='BR', NEG=1, COND='CU_MID', TGT='idle_s')
+        u(RESP='WR', IMM=0x1D00, ORS='VEC', EXPECT='RESP',
+          comment='take mid-instruction exception (FPU 6.1, the FMUL.B example)')
+        L('cu_midw')
+        u(SEQ='BR', COND='SAVE_REQ', TGT='save')
+        u(SEQ='BR', COND='CU_VALID', TGT='cu_midw')
+        u(SEQ='JUMP', TGT='idle')
+
+        # The CU's instruction to the APU (FPU 5.1.1.2): CMD and XI from the
+        # CU, then the MC68881's path from the unpacking on.
+        L('cu_take')
+        u(BIU='CU_TAKE', FLAG='SET_RUN', comment="CMD, XI <= the CU's; FPIAR <= its PC")
+        u(PSR='FPCR', RMR='FPCR', FPSR='CLREXC', MOP='CLRQ', FLAG='PEND_NONE',
+          comment='FPU 2.3.3: the exception byte is cleared at the start')
+        u(SEQ='DISP', IDX='OPCLASS', TGT='t_cu')
+
     L('cmd')
     u(BIU='CMD_ACK', FLAG='CLR_NULL', comment='CMD, IS_COND <= the latched word')
     # Entered with CMD set, from here or from FRESTORE of a pending instruction.
+    # The pending code marks an instruction whose take-exception primitive
+    # has not been read: pre_exc and BSUN set it, and FSAVE saves the
+    # instruction as pending if the response has not been read since.
     L('begin')
-    u(SEQ='BR', COND='IS_COND', TGT='cond')
+    u(SEQ='BR', COND='IS_COND', TGT='cond', FLAG='PEND_NONE')
     u(SEQ='BR', COND='EXC_PEND', TGT='gen_pend')
     L('gen_go')
     u(SEQ='BR', COND='FLINE', TGT='fline')
@@ -76,9 +113,17 @@ def build(model=68881):
     # FPU 6.4.2.2: a pending exception is reported by the next opclass 000,
     # 010 or 011 instruction or conditional, never by the others.
     L('gen_pend')
+    if model == 68882:
+        # With an instruction held in the CU, FMOVEM and the control
+        # registers report it too: going ahead would show them the
+        # registers before that instruction has run (doc/model.md).
+        u(SEQ='BR', COND='CU_VALID', TGT='pre_exc')
     u(SEQ='BR', NEG=1, COND='REPORTS', TGT='gen_go')
     L('pre_exc')
-    u(RESP='WR', IMM=0x1C00, ORS='VEC', EXPECT='RESP', SEQ='JUMP', TGT='idle',
+    # The MC68882 keeps it past the acknowledge, and the main processor may
+    # start the instruction again, to be told again (FPU 7.2.2).
+    u(RESP='WR', IMM=0x1C00, ORS='VEC', EXPECT='CMD' if model == 68882 else 'RESP',
+      SEQ='JUMP', TGT='idle', FLAG='PEND_CMD',
       comment='take pre-instruction exception; persists until the acknowledge')
 
     # FPU 6.1.11: an illegal command word. Table 7-7's $1C0B
@@ -196,7 +241,8 @@ def build(model=68881):
     u(SEQ='BR', NEG=1, COND='BSUN', TGT='cond_eval')
     u(FLAG='BSUN', comment='EXC BSUN, AEXC IOP')
     u(SEQ='BR', NEG=1, COND='BSUN_EN', TGT='cond_eval')
-    u(RESP='WR', IMM=0x5C30, EXPECT='RESP', SEQ='JUMP', TGT='idle', comment='take BSUN, with the PC')
+    u(RESP='WR', IMM=0x5C30, EXPECT='CMD' if model == 68882 else 'RESP', SEQ='JUMP',
+      TGT='idle', FLAG='PEND_CMD', comment='take BSUN, with the PC')
     L('cond_eval')
     u(RESP='WR', IMM=0x0800, ORS='TF', EXPECT='CMD', SEQ='JUMP', TGT='idle', comment='null CA=0 TF')
 
@@ -205,7 +251,15 @@ def build(model=68881):
     # =========================================================================
     L('save')
     u(SEQ='BR', COND='NULL_STATE', TGT='save_null')
+    if model == 68882:
+        u(SEQ='BR', COND='CU_MID', TGT='cu_bsave')
     u(SEQ='BR', COND='CMD_PEND', TGT='save_latched')
+    # A take-exception primitive not yet read: its instruction is pending,
+    # and FRESTORE starts it again, to report again (the model's "fresh"
+    # dialog, doc/model.md). Read, the main processor starts it itself.
+    u(SEQ='BR', COND='RESP_READ', TGT='save_none')
+    u(SEQ='BR', COND='PCODE', TGT='save_frame')
+    L('save_none')
     u(FLAG='PEND_NONE', SEQ='JUMP', TGT='save_frame')
     L('save_latched')
     u(BIU='CMD_ACK', comment='the latched instruction goes into the frame')
@@ -217,10 +271,15 @@ def build(model=68881):
     u(XOP='PACKX', TSRC='IMM', IMM=fr['idle'], BIU='SAVE_WR', XFER=fr['idle_n'], comment='idle frame')
     # The MC68882's conversion-unit state sits between the exceptional operand
     # and the command word (figure 6-5).
-    for src in ('FLAGS', 'ONES', 'XI2', 'XI1', 'XI0') + ('ONES',) * fr['cu_n'] + ('CMDW',):
-        u(TSRC=src, BIU='OPR_WR', comment='highest address first' if src == 'FLAGS' else '')
+    cu = [('ONES', 0)] * 3 + [('CU', k) for k in range(4, -1, -1)] if fr['cu_n'] else []
+    for src, k in [('FLAGS', 0), ('ONES', 0), ('XI2', 0), ('XI1', 0), ('XI0', 0)] + cu + [('CMDW', 0)]:
+        u(TSRC=src, IMM=k, BIU='OPR_WR', comment='highest address first' if src == 'FLAGS' else '')
         u(SEQ='WAIT', NEG=1, COND='OPR_VALID')
-    u(FLAG='CLR_EXC', comment='FPU 6.4.3: idle, no pending exceptions')
+    if model == 68882:
+        u(FLAG='CLR_EXC', TSRC='ONES', TDST='CU', IMM=0,
+          comment='FPU 6.4.3: idle, no pending exceptions; the CU empty')
+    else:
+        u(FLAG='CLR_EXC', comment='FPU 6.4.3: idle, no pending exceptions')
     u(BIU='CLEAR', SEQ='JUMP', TGT='idle')
     L('save_null')
     u(TSRC='IMM', IMM=0x0018, BIU='SAVE_WR', XFER=0, SEQ='JUMP', TGT='idle')
@@ -240,9 +299,10 @@ def build(model=68881):
     u(TSRC='RESTW', BIU='RESTORE_WR', XFER=0, SEQ='JUMP', TGT='reset')
     L('rest_idle')
     u(TSRC='RESTW', BIU='RESTORE_WR', XFER=fr['idle_n'])
-    for dst in ('CMD',) + ('NONE',) * fr['cu_n'] + ('XI0', 'XI1', 'XI2', 'NONE', 'FLAGS'):
+    cu = [('CU', k) for k in range(5)] + [('NONE', 0)] * 3 if fr['cu_n'] else []
+    for dst, k in [('CMD', 0)] + cu + [('XI0', 0), ('XI1', 0), ('XI2', 0), ('NONE', 0), ('FLAGS', 0)]:
         u(SEQ='WAIT', COND='OPW_VALID')
-        u(BIU='OPW_ACK', TSRC='OPW', TDST=dst)
+        u(BIU='OPW_ACK', TSRC='OPW', TDST=dst, IMM=k)
     u(ASRC='UNPACKX', FLAG='CLR_NULL')
     u(RF='WRITE', RFA='ETEMP')
     u(SEQ='BR', COND='PEND_GEN', TGT='rest_gen')
@@ -251,10 +311,22 @@ def build(model=68881):
     # A pending instruction starts again. No CLEAR: the response must stay
     # $8900 (set by the restore write) until its first primitive is there,
     # or a main processor re-reading it after RTE would see "done".
+    # On the MC68882 it goes back to the command latch instead, behind an
+    # instruction the frame left in the CU.
+    after = 'rest_relatch' if model == 68882 else 'begin'
     L('rest_gen')
-    u(FLAG='CLR_COND', SEQ='JUMP', TGT='begin', comment='start the pending instruction again')
+    u(FLAG='CLR_COND', SEQ='JUMP', TGT=after, comment='start the pending instruction again')
     L('rest_cond')
-    u(FLAG='SET_COND', SEQ='JUMP', TGT='begin')
+    u(FLAG='SET_COND', SEQ='JUMP', TGT=after)
+    if model == 68882:
+        L('rest_relatch')
+        u(BIU='RELATCH', SEQ='JUMP', TGT='idle')
+
+        # FSAVE while the CU's dialog is not over: a busy frame, and the
+        # CU's dialog back after FRESTORE (the stub busy_save returns to).
+        L('cu_bsave')
+        u(SEQ='CALL', TGT='busy_save')
+        u(BIU='CU_RESUME', SEQ='JUMP', TGT='idle')
 
     # =========================================================================
     # Jump tables
@@ -265,4 +337,6 @@ def build(model=68881):
                            3: 'ci_2', 5: 'ci_2', 6: 'ci_2', 7: 'ci_3'}, 'fline')
     p.table('t_ctlout', 3, {0: 'co_iar', 1: 'co_iar', 2: 'co_1', 4: 'co_1',
                             3: 'co_2', 5: 'co_2', 6: 'co_2', 7: 'co_3'}, 'fline')
+    if model == 68882:
+        p.table('t_cu', 3, {0: 'cu_rr', 2: 'cu_mem'}, 'illegal')
     return p

@@ -249,6 +249,7 @@ class Core:
         self.pcode = 0
         self.ev_resp = self.ev_rsel = self.ev_save = 0
         self.restore_req_q = 0
+        self.run = 0                # RD68885: a released instruction computes
 
     def entry(self, name):
         return self.labels[name]
@@ -270,7 +271,10 @@ class Core:
         out = dict(resp_we=0, resp=0, resp_oneshot=0, expect=0, resp_cond=0,
                    cmd_ack=0, opw_ack=0, opr_we=0, opr=0, rsel_we=0, rsel=0,
                    rsel_dir=0, save_we=0, save=0, save_xfer=0, restore_we=0,
-                   restore=0, restore_xfer=0, fpiar_we=0, fpiar=0, clear=0)
+                   restore=0, restore_xfer=0, fpiar_we=0, fpiar=0, clear=0,
+                   resp_xfer=0, cu_take=0, cu_load=0, cu_idx=0, cu_data=0, cu_resume=0,
+                   relatch=0, relatch_word=0, relatch_cond=0,
+                   apu_run=self.run, pcen=int((self.fpcr >> 8) & 0x7F != 0))
 
         # ---- traps: the RESET pin, an abort, a restore CIR write ----------
         restore_rise = b['restore_req'] and not self.restore_req_q
@@ -280,6 +284,8 @@ class Core:
             trap = 'reset'
         elif b['abort']:
             trap = 'abort'
+        elif b.get('abort_ab'):
+            trap = 'abort_ab'
         elif restore_rise:
             trap = 'restore'
         # The sticky event copies (doc/microcode.md).
@@ -288,6 +294,7 @@ class Core:
         ev_save = self.ev_save | b['save_read']
         if trap:
             self.ev_resp, self.ev_rsel, self.ev_save = ev_resp, ev_rsel, ev_save
+            self.run = 0
             self.upc = self.entry(trap)
             return out
 
@@ -341,6 +348,8 @@ class Core:
                 'P_SPECIAL': (self.xi[0] >> 28 & 7) == 7 and (self.xi[0] >> 16 & 0xFFF) == 0xFFF,
                 'P_SE': self.xi[0] >> 30 & 1, 'K_GT17': sext7(self.mask) > 17, 'K_POS': sext7(self.mask) > 0,
                 'Q_ODD': self.c & 1, 'A_POW2': a.mant == 1 << 71,
+                'CU_READY': b.get('cu_ready', 0), 'CU_VALID': b.get('cu_valid', 0),
+                'CU_MID': b.get('cu_mid', 0), 'PCODE': self.pcode,
             }[cond_name]
         cond = int(bool(cond)) ^ F('NEG')
 
@@ -371,6 +380,8 @@ class Core:
         elif ts == 'SEQST':
             tbus = (self.stack[(self.sp - 1) & 3] << 20) | (self.mask << 12) | (self.rn << 9) \
                 | (self.is_cond << 8) | (self.exc_pend << 7) | (ev_resp << 6) | (ev_rsel << 5)
+        elif ts == 'CU':
+            tbus = b['cu_save'][imm & 7]
         else:
             tbus = 0xFFFFFFFF
 
@@ -398,6 +409,8 @@ class Core:
             n_cmd = tbus >> 16
         elif td == 'FLAGS':
             n_exc = 1 - (tbus >> 27 & 1)
+        elif td == 'CU':
+            out.update(cu_load=1, cu_idx=imm & 7, cu_data=tbus)
         elif td == 'SEQST':
             push_addr = (tbus >> 20) & 0xFFF
             n_mask, n_rn = (tbus >> 12) & 0xFF, (tbus >> 9) & 7
@@ -418,7 +431,7 @@ class Core:
                 v |= cmd >> 4 & 7
             out.update(resp_we=1, resp=v, resp_oneshot=F('ONESHOT'),
                        expect=fields.enum('EXPECT', F('EXPECT')),
-                       resp_cond=int(rs == 'WRC'))
+                       resp_cond=int(rs == 'WRC'), resp_xfer=F('XFER') & 3)
             ev_resp = 0
         bo = F('BIU')
         if bo == 'CMD_ACK':
@@ -440,6 +453,13 @@ class Core:
             out.update(fpiar_we=1, fpiar=tbus)
         elif bo == 'CLEAR':
             out['clear'] = 1
+        elif bo == 'CU_TAKE':
+            out['cu_take'] = 1
+            n_cmd, n_is_cond, n_xi = b['cu_word'], 0, list(b['cu_d'])
+        elif bo == 'CU_RESUME':
+            out['cu_resume'] = 1
+        elif bo == 'RELATCH':
+            out.update(relatch=1, relatch_word=cmd, relatch_cond=self.is_cond)
 
         # ---- the registers ------------------------------------------------
         rfop = F('RF')
@@ -767,6 +787,11 @@ class Core:
             n_stk = 1
         elif fl == 'CLR_STK':
             n_stk = 0
+        n_run = self.run
+        if fl == 'SET_RUN':
+            n_run = 1
+        elif fl == 'CLR_RUN':
+            n_run = 0
 
         # ---- the next micro-address ----------------------------------------
         seq = F('SEQ')
@@ -805,6 +830,7 @@ class Core:
         self.mask, self.rn, self.ctr = n_mask, n_rn, n_ctr
         self.cmd, self.is_cond = n_cmd, n_is_cond
         self.exc_pend, self.null_state, self.pcode = n_exc, n_null, n_pcode
+        self.run = n_run
         if td == 'SEQST':
             ev_resp, ev_rsel = (tbus >> 6) & 1, (tbus >> 5) & 1
         self.ev_resp, self.ev_rsel, self.ev_save = ev_resp, ev_rsel, ev_save

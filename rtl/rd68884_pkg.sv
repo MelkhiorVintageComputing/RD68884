@@ -70,6 +70,7 @@ package rd68884_pkg;
   localparam logic [2:0] EXP_OPW  = 3'd2;   // an operand write
   localparam logic [2:0] EXP_OPR  = 3'd3;   // an operand read
   localparam logic [2:0] EXP_RSEL = 3'd4;   // a register select read
+  localparam logic [2:0] EXP_PC   = 3'd5;   // MC68882: the PC, asked for (FPU 7.2.10)
 
   // -------------------------------------------------------------------------
   // Exception vectors, FPU table 7-6.

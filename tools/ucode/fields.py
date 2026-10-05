@@ -48,7 +48,12 @@ FIELDS = [
               # M7: A's mantissa exactly 1 (a power of two)
               'A_POW2',
               # M8: the restore word is a busy frame's
-              'REST_BUSY']),
+              'REST_BUSY',
+              # RD68885: the conversion unit holds an instruction ready for
+              # the APU; holds one; holds one whose dialog is not over
+              'CU_READY', 'CU_VALID', 'CU_MID',
+              # the pending code (FLAG PEND_CMD/PEND_NONE) is set
+              'PCODE']),
     ('IDX', ['OPCLASS', 'RX', 'OPMODE']),
     ('TGT', UADDR_BITS),
     ('IMM', 16),
@@ -65,8 +70,12 @@ FIELDS = [
     # for reading; SAVE_WR and RESTORE_WR answer with TBUS[15:0], XFER long
     # words to follow; FPIAR_WR writes TBUS to FPIAR; CLEAR returns the BIU to
     # idle (rd68884_biu clear_i).
+    # RD68885 (doc/rd68885.md): CU_TAKE moves the conversion unit's command
+    # word into CMD and its operand into XI (and its PC into FPIAR, in the
+    # BIU); CU_RESUME gives back the CU's dialog after FRESTORE of a busy
+    # frame; RELATCH puts CMD back in the command latch.
     ('BIU', ['NONE', 'CMD_ACK', 'OPW_ACK', 'OPR_WR', 'RSEL_WR', 'SAVE_WR',
-             'RESTORE_WR', 'FPIAR_WR', 'CLEAR']),
+             'RESTORE_WR', 'FPIAR_WR', 'CLEAR', 'CU_TAKE', 'CU_RESUME', 'RELATCH']),
     ('XFER', 6),
 
     # ---- the 32-bit transfer bus ---------------------------------------------
@@ -74,10 +83,11 @@ FIELDS = [
     # SEQST, for a busy frame (doc/microcode.md): {the return stack's top
     # (12), MASK (8), RN (3), IS_COND, EXC_PEND, the RESP_READ and RSEL_READ
     # events, 0000}. As TDST it pushes the address and loads the rest.
+    # CU (RD68885): the conversion unit's frame word IMM[2:0] (doc/model.md).
     ('TSRC', ['T', 'OPW', 'IMM', 'FPCR', 'FPSR', 'FPIAR', 'CMDW', 'XI0', 'XI1',
-              'XI2', 'FLAGS', 'RESTW', 'ONES', 'SEQST']),
+              'XI2', 'FLAGS', 'RESTW', 'ONES', 'SEQST', 'CU']),
     ('TDST', ['NONE', 'FPCR', 'FPSR', 'MASK', 'XI0', 'XI1', 'XI2', 'CMD',
-              'FLAGS', 'SEQST']),
+              'FLAGS', 'SEQST', 'CU']),
 
     # ---- the floating-point registers -------------------------------------------
     # RF READ: RFQ <= RF[addr] (available to the next microinstruction).
@@ -137,9 +147,11 @@ FIELDS = [
     # LOAD: MASK <= the command word's static list. NEXT: RN <= the next
     # register of the list in transfer order (FPU 4.7.1.6), and clear it.
     ('MASK', ['NONE', 'LOAD', 'NEXT']),
+    # SET_RUN/CLR_RUN (RD68885): the APU computes a released instruction,
+    # so the conversion unit may take the next (rd68884_biu apu_run_i).
     ('FLAG', ['NONE', 'SET_EXC', 'CLR_EXC', 'SET_NULL', 'CLR_NULL', 'BSUN',
               'RESET', 'PEND_NONE', 'PEND_CMD', 'SET_COND', 'CLR_COND', 'SET_STK',
-              'CLR_STK']),
+              'CLR_STK', 'SET_RUN', 'CLR_RUN']),
 ]
 
 

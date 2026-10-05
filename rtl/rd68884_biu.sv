@@ -188,7 +188,37 @@ module rd68884_biu #(
     output logic        rsel_read_o,     // the register select CIR was read
     output logic        save_read_o,     // a prepared format word was read
     output logic        abort_o,         // the control CIR was written
-    output logic        pv_o             // a protocol violation is pending
+    output logic        pv_o,            // a protocol violation is pending
+
+    // ---- RD68885: the conversion unit (MODEL = 68882, doc/rd68885.md) -----
+    // Inert in the MC68881 build. apu_run: the sequencer computes a released
+    // instruction, so the CU may take the next; pcen: an exception is
+    // enabled, so the CU's first primitive asks for the PC; resp_xfer: the
+    // long words a CA = 0 transfer moves (the expectation returns to a
+    // command after the last). cu_take/cu_load/cu_resume/relatch: the
+    // microword's BIU actions of the same names, and TDST CU (cu_idx, the
+    // frame word, cu_data its value).
+    input  logic        apu_run_i,
+    input  logic        pcen_i,
+    input  logic [1:0]  resp_xfer_i,
+    input  logic        cu_take_i,
+    input  logic        cu_load_i,
+    input  logic [2:0]  cu_idx_i,
+    input  logic [31:0] cu_data_i,
+    input  logic        cu_resume_i,
+    input  logic        relatch_i,
+    input  logic [15:0] relatch_word_i,
+    input  logic        relatch_cond_i,
+    output logic        abort_ab_o,      // AB: the instruction in its window ends
+    output logic        cu_ready_o,      // the CU's instruction can go to the APU
+    output logic        cu_valid_o,      // the CU holds an instruction
+    output logic        cu_mid_o,        // ... whose dialog is not over
+    output logic [15:0] cu_word_o,
+    output logic [31:0] cu_d0_o,         // its operand, as received
+    output logic [31:0] cu_d1_o,
+    output logic [31:0] cu_d2_o,
+    output logic [31:0] cu_w0_o,         // the frame's first two CU long words
+    output logic [31:0] cu_w1_o
 );
 
   // ==========================================================================
@@ -452,6 +482,19 @@ module rd68884_biu #(
   logic [31:0] wstage_q;         // write bytes collected so far
   logic [31:0] hold_q;           // read value snapshotted on the first part
   logic        resp_fresh_q;     // a command latched, not yet answered
+  // RD68885 (MODEL = 68882): the conversion unit, the mandatory PC, CA = 0.
+  logic        cu_v_q;           // the CU holds an instruction
+  logic        cu_rel_q;         // ... and has released the main processor
+  logic        cu_pcv_q;         // ... and has its PC
+  logic        cu_bwl_q;         // ... a B, W or L source: no CA = 0
+  logic [15:0] cu_word_q;
+  logic [31:0] cu_pc_q;
+  logic [31:0] cu_d0_q, cu_d1_q, cu_d2_q;
+  logic [1:0]  cu_cnt_q;         // operand long words still to come
+  logic [1:0]  ca0_q;            // the sequencer's CA = 0 transfer: ditto
+  logic [1:0]  resp_xfer_q;      // with the response: the transfer's length
+  logic [2:0]  pc_after_q;       // what is expected once the PC is written
+  logic        pc_cu_q;          // the PC is the CU's instruction's
   logic [5:0]  resp_wait_q;      // clocks the current response read has waited
   logic        hold_save_q;      // ... the save read it was a format word
 
@@ -491,6 +534,14 @@ module rd68884_biu #(
     end
   end
 
+  // RD68885 (doc/rd68885.md, and the conversion unit below).
+  localparam bit IS82 = (MODEL == 68882);
+  logic cu_dlg;                  // the CU's dialog is not over
+  assign cu_dlg = cu_v_q & ~cu_rel_q;
+  // An operand long word for the CU: in its dialog, outside a frame.
+  logic cu_route;
+  assign cu_route = IS82 & cu_dlg & (cu_cnt_q != 2'd0) & (xfer_q == 6'd0);
+
   // The protocol-violation rules of FPU 6.1.12, for the MC68881, against the
   // current expectation. Only accesses that touch a checked register count.
   logic touches_rsel;
@@ -500,7 +551,12 @@ module rd68884_biu #(
     // A1 tells them apart on every port (a 32-bit port enables all lanes).
     touches_rsel = is_rsel & ~a_d[1];
     violation = 1'b0;
-    if ((is_cmd || is_cond) && !rd_d) begin
+    if (IS82 && expect_q == rd68884_pkg::EXP_PC) begin
+      // FPU 6.1.12 item 4: the PC asked for comes before anything else.
+      violation = ((is_cmd || is_cond) && !rd_d) || is_oper || touches_rsel;
+    end else if (IS82 && is_iar && !rd_d && xfer_q == 6'd0) begin
+      violation = 1'b1;                       // items 1-3: never unasked
+    end else if ((is_cmd || is_cond) && !rd_d) begin
       violation = expect_q != rd68884_pkg::EXP_CMD;
     end else if (is_oper && !rd_d) begin
       violation = expect_q != rd68884_pkg::EXP_OPW;
@@ -531,7 +587,7 @@ module rd68884_biu #(
       end else if (is_oper && rd_d) begin
         ready = opr_valid_q;                  // every part reads opr_q
       end else if (is_oper && !rd_d && last_part) begin
-        ready = ~opw_valid_q;
+        ready = ~opw_valid_q | cu_route;      // the CU's buffer is always free
       end else if (is_rest && rd_d) begin
         ready = restore_valid_q;
       end
@@ -590,15 +646,56 @@ module rd68884_biu #(
   assign fp_exc_resp = (resp_q[13:9] == 5'b01110) && (resp_q[7:0] >= 8'd48) &&
                        (resp_q[7:0] <= 8'd54);
 
+  // ---- RD68885: the conversion unit (doc/rd68885.md) ----------------------
+  // FPU 5.1.1.2: while the APU computes a released instruction, the CU takes
+  // the next one if it is register to register (FMOVECR too), or opclass
+  // 010 with a B, W, L, S, D or X source; answers its first primitive
+  // itself (figure 7-17; 7-19, CA = 0, for S, D, X; 7-18 for B, W, L);
+  // collects its operand; and holds it for the sequencer (cu_take).
+  // tools/iss/biu.py is the definition.
+
+  // What the CU would do with a command word: the written one and the
+  // latched one (taken when the CU frees while the APU still runs).
+  logic        acc_takes, grab_takes;
+  logic [15:0] acc_prim, grab_prim;
+  logic [1:0]  acc_n, grab_n;
+  logic        acc_bwl, grab_bwl;
+  logic [1:0]  acc_len, grab_len;
+  rd68884_cu_decode u_dec_acc (
+      .word (wmerged[31:16]), .pcen(pcen_i), .takes(acc_takes), .prim(acc_prim),
+      .n(acc_n), .bwl(acc_bwl), .len(acc_len));
+  rd68884_cu_decode u_dec_grab (
+      .word (cmd_word_q), .pcen(pcen_i), .takes(grab_takes), .prim(grab_prim),
+      .n(grab_n), .bwl(grab_bwl), .len(grab_len));
+
+  // Where it goes: the operand's long words in order (S, L, W, B one; D two;
+  // X three), counted down.
+  logic [1:0] cu_total, cu_k;
+  assign cu_total = (cu_word_q[12:10] == 3'd5) ? 2'd2 : (cu_word_q[12:10] == 3'd2) ? 2'd3 : 2'd1;
+  assign cu_k     = cu_total - cu_cnt_q;
+
+  assign cu_ready_o = cu_v_q & (cu_cnt_q == 2'd0) & (cu_rel_q | cu_bwl_q) &
+                      ~((expect_q == rd68884_pkg::EXP_PC) & pc_cu_q);
+  assign cu_valid_o = cu_v_q;
+  assign cu_mid_o   = cu_dlg;
+  assign cu_word_o  = cu_word_q;
+  assign cu_d0_o    = cu_d0_q;
+  assign cu_d1_o    = cu_d1_q;
+  assign cu_d2_o    = cu_d2_q;
+  // The frame's CU words (doc/model.md): an empty CU is all ones.
+  assign cu_w0_o = cu_v_q ? {cu_word_q, 1'b0, cu_rel_q, cu_pcv_q, 5'b11111, 6'd0, cu_cnt_q}
+                          : 32'hFFFF_FFFF;
+  assign cu_w1_o = (cu_v_q & cu_pcv_q) ? cu_pc_q : 32'hFFFF_FFFF;
+
   // Events of the completing access.
   logic ev_resp, ev_rsel, ev_save, ev_save_again, ev_abort, ev_cmd, ev_opw;
-  logic ev_opr, ev_rest_w, ev_rest_r, ev_iar, ev_pv;
+  logic ev_opr, ev_rest_w, ev_rest_r, ev_iar, ev_pv, ev_ab;
   logic save_ok;
   assign save_ok = (xfer_q == 6'd0);
   always_comb begin
     ev_resp = 1'b0; ev_rsel = 1'b0; ev_save = 1'b0; ev_save_again = 1'b0;
     ev_abort = 1'b0; ev_cmd = 1'b0; ev_opw = 1'b0; ev_opr = 1'b0;
-    ev_rest_w = 1'b0; ev_rest_r = 1'b0; ev_iar = 1'b0; ev_pv = 1'b0;
+    ev_rest_w = 1'b0; ev_rest_r = 1'b0; ev_iar = 1'b0; ev_pv = 1'b0; ev_ab = 1'b0;
     if (take && last_part) begin
       if (violation && !pv_q) begin
         ev_pv = 1'b1;
@@ -623,8 +720,11 @@ module rd68884_biu #(
       // or a null FRESTORE, which the handler's FSAVE / BSET / FRESTORE does
       // (FPU 7.2.2, 7.4.2.5, 5.2.2). Anything else is acknowledged as the
       // MC68881 does.
+      // On the MC68882, AB (bit 16 here) aborts only the instruction in its
+      // window, below (ev_abort_ab), and leaves a pending exception.
       ev_abort = is_ctrl & ~rd_d &
-                 ((MODEL != 68882) | wmerged[16] | ~fp_exc_resp);
+                 (IS82 ? (~wmerged[16] & (pv_q | ~fp_exc_resp)) : 1'b1);
+      ev_ab    = IS82 & is_ctrl & ~rd_d & wmerged[16];
       if (pv_q) begin
         ev_save       = save_ok & is_save & rd_d & (first_part ? save_valid_q : hold_save_q);
         ev_save_again = save_ok & is_save & rd_d & ~(first_part ? save_valid_q : hold_save_q);
@@ -639,10 +739,51 @@ module rd68884_biu #(
   logic resp_stale;
   assign resp_stale = ~first_part & resp_dirty_q;
 
-  assign resp_read_o = ev_resp & ~resp_stale & ~resp_we_i;
+  // The sequencer's response write takes effect unless it is conditional
+  // (WRC) and the BIU is in another instruction's dialog: a command latched
+  // or being latched, the CU's, or a PC owed (RD68885).
+  logic resp_we_eff;
+  assign resp_we_eff = resp_we_i && !(resp_cond_i && (cmd_pend_q || ev_cmd ||
+                                      (IS82 && (cu_dlg || expect_q == rd68884_pkg::EXP_PC))));
+  // A write that takes effect supersedes the primitive being read; one that
+  // stands aside does not (RD68885: the CU's primitive read in the clock of
+  // the APU's end-of-instruction write).
+  assign resp_read_o = ev_resp & ~resp_stale & ~resp_we_eff;
   assign rsel_read_o = ev_rsel;
   assign save_read_o = ev_save;
   assign abort_o     = ev_abort;
+
+  // AB with no latched command and no CU dialog: the sequencer's dialog, or
+  // a frame transfer, ends (the abort_ab entry); with none, nothing does.
+  logic ev_abort_ab;
+  assign ev_abort_ab = ev_ab & ~cmd_pend_q & ~cu_dlg &
+                       ((expect_q != rd68884_pkg::EXP_CMD) | pv_q);
+  assign abort_ab_o  = ev_abort_ab;
+
+  // The CU takes a command: written now, or latched before it was free.
+  logic cu_acc, cu_grab;
+  assign cu_acc  = IS82 & ev_cmd & is_cmd & apu_run_i & ~cu_v_q & ~cmd_pend_q & acc_takes;
+  assign cu_grab = IS82 & cmd_pend_q & ~cmd_cond_q & ~cu_v_q & apu_run_i & ~cmd_ack_i &
+                   ~pv_q & grab_takes & ~ev_ab;
+  logic cu_opw;
+  assign cu_opw  = ev_opw & cu_route;
+
+  // FPU 7.2.10: a primitive read with its PC bit set makes the PC the next
+  // access expected. From the value the main processor read, even if the
+  // sequencer rewrites the response in that clock (which masks
+  // resp_read_o); what is expected after the PC is what that clock leaves.
+  logic pc_read;
+  assign pc_read = IS82 & ev_resp & rd_out[30];
+  logic [2:0] pc_after;
+  always_comb begin
+    if (resp_we_eff) begin
+      pc_after = resp_oneshot_i ? rd68884_pkg::EXP_RESP : expect_i;
+    end else if (oneshot_q) begin
+      pc_after = expect_next_q;
+    end else begin
+      pc_after = expect_q;
+    end
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -686,6 +827,20 @@ module rd68884_biu #(
       restore_word_q  <= 16'd0;
       restore_q       <= 16'hFFFF;
       fpiar_q         <= 32'd0;
+      cu_v_q          <= 1'b0;
+      cu_rel_q        <= 1'b0;
+      cu_pcv_q        <= 1'b0;
+      cu_bwl_q        <= 1'b0;
+      cu_word_q       <= 16'd0;
+      cu_pc_q         <= 32'hFFFF_FFFF;
+      cu_d0_q         <= 32'hFFFF_FFFF;
+      cu_d1_q         <= 32'hFFFF_FFFF;
+      cu_d2_q         <= 32'hFFFF_FFFF;
+      cu_cnt_q        <= 2'd0;
+      ca0_q           <= 2'd0;
+      resp_xfer_q     <= 2'd0;
+      pc_after_q      <= rd68884_pkg::EXP_CMD;
+      pc_cu_q         <= 1'b0;
     end else begin
       // ---- the bus cycle --------------------------------------------------
       case (state)
@@ -748,16 +903,32 @@ module rd68884_biu #(
       end else begin
         resp_wait_q <= 6'd0;
       end
-      if (resp_we_i && !(resp_cond_i && (cmd_pend_q || ev_cmd))) begin
+      // WRC stands aside while the BIU is in another instruction's dialog:
+      // a command latched (or being latched), the CU's, or a PC owed.
+      if (resp_we_eff) begin
         resp_fresh_q <= 1'b0;
         resp_q       <= resp_i;
         oneshot_q    <= resp_oneshot_i;
         resp_dirty_q <= 1'b1;
+        resp_xfer_q  <= IS82 ? resp_xfer_i : 2'd0;
+        // With a PC owed (MC68882), the PC still comes first: the write
+        // sets what is expected after it.
         if (resp_oneshot_i) begin
-          expect_q      <= rd68884_pkg::EXP_RESP;
+          if (IS82 && expect_q == rd68884_pkg::EXP_PC) begin
+            pc_after_q <= rd68884_pkg::EXP_RESP;
+          end else begin
+            expect_q <= rd68884_pkg::EXP_RESP;
+          end
           expect_next_q <= expect_i;
         end else begin
-          expect_q <= expect_i;
+          if (IS82 && expect_q == rd68884_pkg::EXP_PC) begin
+            pc_after_q <= expect_i;
+          end else begin
+            expect_q <= expect_i;
+          end
+          if (IS82 && resp_xfer_i != 2'd0) begin
+            ca0_q <= resp_xfer_i;             // a CA = 0 transfer resumed after FRESTORE
+          end
         end
         // FPU 10.1: the length field of an evaluate-effective-address
         // primitive (bit 12 set, bit 11 clear) gives the operand size.
@@ -792,15 +963,122 @@ module rd68884_biu #(
         restore_req_q   <= 1'b0;
       end
       if (fpiar_we_i) fpiar_q <= fpiar_i;
+      if (IS82 && cu_take_i) begin
+        // The sequencer takes the CU's instruction: its PC becomes FPIAR
+        // (FPU 7.2.10); one still in its dialog (B, W, L) is released now.
+        if (cu_pcv_q) fpiar_q <= cu_pc_q;
+        if (!cu_rel_q && !cmd_pend_q) begin
+          resp_q       <= rd68884_pkg::PRIM_NULL_REL;
+          oneshot_q    <= 1'b0;
+          resp_dirty_q <= 1'b1;
+          expect_q     <= rd68884_pkg::EXP_CMD;
+        end
+        cu_v_q   <= 1'b0;
+        cu_rel_q <= 1'b0;
+        cu_pcv_q <= 1'b0;
+        cu_bwl_q <= 1'b0;
+        cu_cnt_q <= 2'd0;
+        cu_pc_q  <= 32'hFFFF_FFFF;
+        cu_d0_q  <= 32'hFFFF_FFFF;
+        cu_d1_q  <= 32'hFFFF_FFFF;
+        cu_d2_q  <= 32'hFFFF_FFFF;
+      end
+      if (IS82 && cu_load_i) begin
+        // FRESTORE: a CU long word of the frame (doc/model.md, FPU882).
+        case (cu_idx_i)
+          3'd0: begin
+            cu_v_q    <= ~cu_data_i[15];
+            cu_word_q <= cu_data_i[31:16];
+            cu_rel_q  <= ~cu_data_i[15] & cu_data_i[14];
+            cu_pcv_q  <= ~cu_data_i[15] & cu_data_i[13];
+            cu_cnt_q  <= cu_data_i[15] ? 2'd0 : cu_data_i[1:0];
+            cu_bwl_q  <= ~cu_data_i[15] & (cu_data_i[31:29] == 3'd2) &
+                         ((cu_data_i[28:26] == 3'd0) | (cu_data_i[28:26] == 3'd4) |
+                          (cu_data_i[28:26] == 3'd6));
+            if (cu_data_i[15]) begin
+              cu_pc_q <= 32'hFFFF_FFFF;
+              cu_d0_q <= 32'hFFFF_FFFF;
+              cu_d1_q <= 32'hFFFF_FFFF;
+              cu_d2_q <= 32'hFFFF_FFFF;
+            end
+          end
+          3'd1: cu_pc_q <= cu_data_i;
+          3'd2: cu_d0_q <= cu_data_i;
+          3'd3: cu_d1_q <= cu_data_i;
+          3'd4: cu_d2_q <= cu_data_i;
+          default: ;
+        endcase
+      end
+      if (IS82 && cu_resume_i) begin
+        // After FRESTORE of a busy frame: the CU's dialog as it was.
+        resp_dirty_q <= 1'b1;
+        oneshot_q    <= 1'b0;
+        if (cu_cnt_q != 2'd0) begin
+          resp_q   <= cu_bwl_q ? rd68884_pkg::PRIM_NULL_WAIT : rd68884_pkg::PRIM_NULL_REL;
+          expect_q <= rd68884_pkg::EXP_OPW;
+          oplen_q  <= (cu_word_q[12:10] == 3'd6) ? 2'd1 :
+                      (cu_word_q[12:10] == 3'd4) ? 2'd2 : 2'd0;
+        end else begin
+          resp_q   <= rd68884_pkg::PRIM_NULL_WAIT;
+          expect_q <= rd68884_pkg::EXP_RESP;
+        end
+      end
+      if (IS82 && relatch_i) begin
+        // After FRESTORE, a pending instruction back in the latch, behind
+        // the CU's (program.py rest_relatch).
+        cmd_pend_q   <= 1'b1;
+        cmd_word_q   <= relatch_word_i;
+        cmd_cond_q   <= relatch_cond_i;
+        resp_q       <= rd68884_pkg::PRIM_NULL_WAIT;
+        oneshot_q    <= 1'b0;
+        resp_dirty_q <= 1'b1;
+        expect_q     <= rd68884_pkg::EXP_RESP;
+      end
 
       // A one-shot primitive becomes null once read, unless the sequencer
       // replaced it in the meantime (FPU 7.4.2.2).
       if (resp_read_o && oneshot_q) begin
-        resp_q    <= rd68884_pkg::PRIM_NULL_WAIT;
         oneshot_q <= 1'b0;
         expect_q  <= expect_next_q;
+        if (!IS82) begin
+          resp_q <= rd68884_pkg::PRIM_NULL_WAIT;
+        end else if (cu_dlg) begin
+          // The CU's first primitive: register to register releases at
+          // once (figure 7-17); S, D, X answer $0900 (7-19), B, W, L $8900.
+          if (cu_cnt_q == 2'd0) begin
+            cu_rel_q <= 1'b1;
+          end else begin
+            resp_q <= cu_bwl_q ? rd68884_pkg::PRIM_NULL_WAIT : rd68884_pkg::PRIM_NULL_REL;
+          end
+        end else begin
+          resp_q <= rd68884_pkg::PRIM_NULL_WAIT;
+          if (resp_xfer_q != 2'd0) ca0_q <= resp_xfer_q;
+        end
       end
-      if (ev_cmd) begin
+
+      if (cu_acc || cu_grab) begin
+        // The CU takes it, and answers its first primitive itself.
+        cu_v_q        <= 1'b1;
+        cu_rel_q      <= 1'b0;
+        cu_pcv_q      <= 1'b0;
+        cu_word_q     <= cu_acc ? wmerged[31:16] : cmd_word_q;
+        cu_cnt_q      <= cu_acc ? acc_n : grab_n;
+        cu_bwl_q      <= cu_acc ? acc_bwl : grab_bwl;
+        cu_pc_q       <= 32'hFFFF_FFFF;
+        cu_d0_q       <= 32'hFFFF_FFFF;
+        cu_d1_q       <= 32'hFFFF_FFFF;
+        cu_d2_q       <= 32'hFFFF_FFFF;
+        resp_q        <= cu_acc ? acc_prim : grab_prim;
+        oneshot_q     <= 1'b1;
+        resp_dirty_q  <= 1'b1;
+        resp_fresh_q  <= 1'b0;
+        resp_xfer_q   <= 2'd0;
+        oplen_q       <= cu_acc ? acc_len : grab_len;
+        expect_q      <= rd68884_pkg::EXP_RESP;
+        expect_next_q <= ((cu_acc ? acc_n : grab_n) == 2'd0) ? rd68884_pkg::EXP_CMD
+                                                              : rd68884_pkg::EXP_OPW;
+        if (cu_grab) cmd_pend_q <= 1'b0;
+      end else if (ev_cmd) begin
         // FPU 7.2.6/7.2.7: latched; null (CA=1, IA=1) until the sequencer
         // answers. Another command before then is a violation.
         cmd_pend_q <= 1'b1;
@@ -811,9 +1089,33 @@ module rd68884_biu #(
         oneshot_q  <= 1'b0;
         expect_q   <= rd68884_pkg::EXP_RESP;
       end
-      if (ev_opw) begin
+      if (cu_opw) begin
+        // An operand long word for the CU. The last one releases an S, D or
+        // X source (CA = 0: a command is expected next); B, W and L wait
+        // with $8900 for the sequencer (cu_take).
+        case (cu_k)
+          2'd0:    cu_d0_q <= wmerged;
+          2'd1:    cu_d1_q <= wmerged;
+          default: cu_d2_q <= wmerged;
+        endcase
+        cu_cnt_q <= cu_cnt_q - 2'd1;
+        if (cu_cnt_q == 2'd1) begin
+          if (cu_bwl_q) begin
+            expect_q <= rd68884_pkg::EXP_RESP;
+          end else begin
+            cu_rel_q <= 1'b1;
+            expect_q <= rd68884_pkg::EXP_CMD;
+          end
+        end
+      end else if (ev_opw) begin
         opw_data_q  <= wmerged;
         opw_valid_q <= 1'b1;
+        // FPU 7.5.1: the sequencer's own CA = 0 transfer; the main processor
+        // does not read the response after it.
+        if (IS82 && xfer_q == 6'd0 && ca0_q != 2'd0) begin
+          ca0_q <= ca0_q - 2'd1;
+          if (ca0_q == 2'd1) expect_q <= rd68884_pkg::EXP_CMD;
+        end
       end
       if (ev_opr) begin
         opr_valid_q <= 1'b0;
@@ -858,8 +1160,17 @@ module rd68884_biu #(
         resp_q          <= rd68884_pkg::PRIM_NULL_WAIT;
         oneshot_q       <= 1'b0;
       end
-      if (ev_iar) begin
+      if (ev_iar && !IS82) begin
         fpiar_q <= wmerged;
+      end else if (ev_iar && !pv_q) begin
+        // The PC asked for: the CU's instruction's, or FPIAR (FPU 7.2.10).
+        expect_q <= pc_after_q;
+        if (pc_cu_q) begin
+          cu_pc_q  <= wmerged;
+          cu_pcv_q <= 1'b1;
+        end else begin
+          fpiar_q <= wmerged;
+        end
       end
       if (ev_pv) begin
         // FPU 6.1.12: the take-mid-instruction primitive with the protocol
@@ -871,13 +1182,53 @@ module rd68884_biu #(
       end
       if (clear_i) begin
         // Like resp_cond_i: a command latched meanwhile keeps its $8900.
-        pv_q <= 1'b0;
+        pv_q  <= 1'b0;
+        ca0_q <= 2'd0;
         if (!cmd_pend_q && !ev_cmd) begin
           resp_fresh_q <= 1'b0;
           resp_q    <= rd68884_pkg::PRIM_NULL_IDLE;
           oneshot_q <= 1'b0;
           expect_q  <= rd68884_pkg::EXP_CMD;
         end
+      end
+      if (ev_ab) begin
+        // FPU 7.2.2, the MC68882's AB: the last instruction received ends,
+        // the APU's goes on, a pending exception stays.
+        if (cmd_pend_q) begin
+          cmd_pend_q <= 1'b0;
+        end else if (cu_dlg) begin
+          cu_v_q   <= 1'b0;
+          cu_rel_q <= 1'b0;
+          cu_pcv_q <= 1'b0;
+          cu_bwl_q <= 1'b0;
+          cu_cnt_q <= 2'd0;
+          cu_pc_q  <= 32'hFFFF_FFFF;
+          cu_d0_q  <= 32'hFFFF_FFFF;
+          cu_d1_q  <= 32'hFFFF_FFFF;
+          cu_d2_q  <= 32'hFFFF_FFFF;
+        end
+        if (ev_abort_ab) begin
+          opw_valid_q     <= 1'b0;
+          opr_valid_q     <= 1'b0;
+          save_valid_q    <= 1'b0;
+          save_req_q      <= 1'b0;
+          restore_req_q   <= 1'b0;
+          restore_valid_q <= 1'b0;
+          restore_xfer_q  <= 6'd0;
+          xfer_q          <= 6'd0;
+          ca0_q           <= 2'd0;
+        end
+        pv_q         <= 1'b0;
+        resp_fresh_q <= 1'b0;
+        oneshot_q    <= 1'b0;
+        expect_q     <= rd68884_pkg::EXP_CMD;
+        resp_q       <= (apu_run_i | (cu_v_q & ~cu_dlg)) ? rd68884_pkg::PRIM_NULL_REL
+                                                         : rd68884_pkg::PRIM_NULL_IDLE;
+      end
+      if (pc_read) begin
+        pc_after_q <= pc_after;
+        pc_cu_q    <= cu_dlg;
+        expect_q   <= rd68884_pkg::EXP_PC;
       end
       if (ev_abort || reset_s) begin
         // FPU 7.2.2: terminate, clear pending exceptions (the sequencer's
@@ -896,6 +1247,16 @@ module rd68884_biu #(
         restore_valid_q <= 1'b0;
         restore_xfer_q  <= 6'd0;
         xfer_q          <= 6'd0;
+        ca0_q           <= 2'd0;
+        cu_v_q          <= 1'b0;
+        cu_rel_q        <= 1'b0;
+        cu_pcv_q        <= 1'b0;
+        cu_bwl_q        <= 1'b0;
+        cu_cnt_q        <= 2'd0;
+        cu_pc_q         <= 32'hFFFF_FFFF;
+        cu_d0_q         <= 32'hFFFF_FFFF;
+        cu_d1_q         <= 32'hFFFF_FFFF;
+        cu_d2_q         <= 32'hFFFF_FFFF;
       end
       if (reset_s) begin
         fpiar_q <= 32'd0;                   // FPU 2.4: cleared by reset

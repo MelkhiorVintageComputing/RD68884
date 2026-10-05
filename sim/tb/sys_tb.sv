@@ -317,16 +317,23 @@ module sys_tb;
   // BIU outputs, then the sequencer's outputs, then its micro-address, in the
   // order tools/iss/lockstep.py reads them. Sampled just before the edge.
   always @(posedge `FCLK) if (ls != 0 && `FPU.rst_n) begin
-    $fwrite(ls, "%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h | ",
+    $fwrite(ls, "%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h ",
       `FPU.arch_reset, `FPU.cmd_pend, `FPU.cmd_cond, `FPU.cmd_word, `FPU.opw_valid,
       `FPU.opw_data, `FPU.opr_valid, `FPU.save_req, `FPU.restore_req,
       `FPU.restore_word, `FPU.fpiar, `FPU.pv, `FPU.resp_read, `FPU.rsel_read,
       `FPU.save_read, `FPU.abort);
-    $fwrite(ls, "%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h | %h\n",
+    // RD68885's conversion unit (constant in the MC68881 build).
+    $fwrite(ls, "%h %h %h %h %h %h %h %h %h %h | ",
+      `FPU.abort_ab, `FPU.cu_ready, `FPU.cu_valid, `FPU.cu_mid, `FPU.cu_word,
+      `FPU.cu_d0, `FPU.cu_d1, `FPU.cu_d2, `FPU.cu_w0, `FPU.cu_w1);
+    $fwrite(ls, "%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h ",
       `FPU.resp_we, `FPU.resp, `FPU.resp_oneshot, `FPU.expect_v, `FPU.resp_cond,
       `FPU.cmd_ack, `FPU.opw_ack, `FPU.opr_we, `FPU.opr, `FPU.rsel_we, `FPU.rsel,
       `FPU.rsel_dir, `FPU.save_we, `FPU.save_v, `FPU.save_xfer, `FPU.restore_we,
-      `FPU.restore_v, `FPU.restore_xfer, `FPU.fpiar_we, `FPU.fpiar_v, `FPU.clear,
+      `FPU.restore_v, `FPU.restore_xfer, `FPU.fpiar_we, `FPU.fpiar_v, `FPU.clear);
+    $fwrite(ls, "%h %h %h %h %h %h %h %h %h %h %h | %h\n",
+      `FPU.apu_run, `FPU.pcen, `FPU.resp_xfer, `FPU.cu_take, `FPU.cu_load, `FPU.cu_idx,
+      `FPU.cu_data, `FPU.cu_resume, `FPU.relatch, `FPU.relatch_word, `FPU.relatch_cond,
       `FPU.u_seq.upc);
   end
 

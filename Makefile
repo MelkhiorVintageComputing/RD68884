@@ -37,6 +37,7 @@ PKGS   := rtl/rd68884_pkg.sv
 GENPKG := $(wildcard rtl/gen/*_pkg.sv)
 GENSRC := $(filter-out $(GENPKG),$(wildcard rtl/gen/*.sv))
 SRCS   := rtl/rd68884_sync.sv \
+          rtl/rd68884_cu_decode.sv \
           rtl/rd68884_biu.sv \
           rtl/rd68884_regfile.sv \
           rtl/rd68884_seq.sv \
@@ -118,7 +119,7 @@ MODEL         ?= 68881
 # negating DSACK before it releases it (the IIsiA7 Mini's, doc/boards.md);
 # then the MC68882 (RD68885, doc/rd68885.md), plain and as the board builds it.
 BUILDS        := 0:0:0:68881 1:0:0:68881 1:1:0:68881 0:0:1:68881 0:0:0:68882 0:0:1:68882
-GENERICS      := BUS_SYNC=$(BUS_SYNC) BUS_SYNC_WAIT=$(BUS_SYNC_WAIT)
+GENERICS      := BUS_SYNC=$(BUS_SYNC) BUS_SYNC_WAIT=$(BUS_SYNC_WAIT) MODEL=$(MODEL)
 
 # The same-clock BIU's pin timing, against the main processor's clock: its
 # period, how long after a falling edge the strobes change (UM specs 9 and 12;
@@ -338,7 +339,7 @@ SYSDEF    += -DSYS_BOARD_IISIA7
 SYSEXTRA  := boards/iisia7_mini/rd68884_iisia7_top.sv sim/models/mmcme2_base.sv
 SYS_PORTS := 32
 endif
-SYSPROGS  ?= fpu_m4 fpu_m5 fpu_m6 fpu_m7 fpu_m8 fpu fparith fparith-dbl
+SYSPROGS  ?= fpu_m4 fpu_m5 fpu_m6 fpu_m7 fpu_m8 fpu_m10 fpu fparith fparith-dbl
 SYS_PORTS ?= 32 16 8
 
 # fpu_m5's and fpu_m6's vectors come from the golden model.
@@ -391,8 +392,10 @@ $(BUILD)/programs/fparith-dbl.expect: sim/programs/fparith.c | dirs
 # The assembly programs are built once per model: what differs is the state
 # frames' format words and sizes (FRAME_IDLE, FRAME_BUSY, IDLE_SIZE), which a
 # few checks compare. The C programs do not depend on the model.
-FRAMESYM_68881 := --defsym FRAME_IDLE=0x1F18 --defsym FRAME_BUSY=0x1FB4 --defsym IDLE_SIZE=0x18
-FRAMESYM_68882 := --defsym FRAME_IDLE=0x1F38 --defsym FRAME_BUSY=0x1FD4 --defsym IDLE_SIZE=0x38
+FRAMESYM_68881 := --defsym FRAME_IDLE=0x1F18 --defsym FRAME_BUSY=0x1FB4 --defsym IDLE_SIZE=0x18 \
+                  --defsym MODEL=68881
+FRAMESYM_68882 := --defsym FRAME_IDLE=0x1F38 --defsym FRAME_BUSY=0x1FD4 --defsym IDLE_SIZE=0x38 \
+                  --defsym MODEL=68882
 $(BUILD)/programs/%-68882.hex: sim/programs/%.S sim/programs/flat.ld | dirs
 	@mkdir -p $(BUILD)/programs
 	@$(CROSS)as -mcpu=68020 -m68881 $(FRAMESYM_68882) -I $(BUILD)/programs -I sim/programs -o $(BUILD)/programs/$*-68882.o $<

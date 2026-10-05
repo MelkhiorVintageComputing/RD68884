@@ -72,6 +72,13 @@ module rd68884_top #(
   logic [31:0] opr, fpiar_v;
   logic [7:0]  rsel;
   logic [5:0]  save_xfer, restore_xfer;
+  // RD68885's conversion unit (inert when MODEL = 68881).
+  logic        abort_ab, cu_ready, cu_valid, cu_mid, apu_run, pcen, cu_take, cu_load;
+  logic        cu_resume, relatch, relatch_cond;
+  logic [15:0] cu_word, relatch_word;
+  logic [31:0] cu_d0, cu_d1, cu_d2, cu_w0, cu_w1, cu_data;
+  logic [2:0]  cu_idx;
+  logic [1:0]  resp_xfer;
 
   rd68884_biu #(
       .BUS_SYNC     (BUS_SYNC),
@@ -130,7 +137,28 @@ module rd68884_top #(
       .rsel_read_o   (rsel_read),
       .save_read_o   (save_read),
       .abort_o       (abort),
-      .pv_o          (pv)
+      .pv_o          (pv),
+      .apu_run_i     (apu_run),
+      .pcen_i        (pcen),
+      .resp_xfer_i   (resp_xfer),
+      .cu_take_i     (cu_take),
+      .cu_load_i     (cu_load),
+      .cu_idx_i      (cu_idx),
+      .cu_data_i     (cu_data),
+      .cu_resume_i   (cu_resume),
+      .relatch_i     (relatch),
+      .relatch_word_i(relatch_word),
+      .relatch_cond_i(relatch_cond),
+      .abort_ab_o    (abort_ab),
+      .cu_ready_o    (cu_ready),
+      .cu_valid_o    (cu_valid),
+      .cu_mid_o      (cu_mid),
+      .cu_word_o     (cu_word),
+      .cu_d0_o       (cu_d0),
+      .cu_d1_o       (cu_d1),
+      .cu_d2_o       (cu_d2),
+      .cu_w0_o       (cu_w0),
+      .cu_w1_o       (cu_w1)
   );
 
   rd68884_seq #(
@@ -174,7 +202,28 @@ module rd68884_top #(
       .restore_xfer_o(restore_xfer),
       .fpiar_we_o    (fpiar_we),
       .fpiar_o       (fpiar_v),
-      .clear_o       (clear)
+      .clear_o       (clear),
+      .abort_ab_i    (abort_ab),
+      .cu_ready_i    (cu_ready),
+      .cu_valid_i    (cu_valid),
+      .cu_mid_i      (cu_mid),
+      .cu_word_i     (cu_word),
+      .cu_d0_i       (cu_d0),
+      .cu_d1_i       (cu_d1),
+      .cu_d2_i       (cu_d2),
+      .cu_w0_i       (cu_w0),
+      .cu_w1_i       (cu_w1),
+      .apu_run_o     (apu_run),
+      .pcen_o        (pcen),
+      .resp_xfer_o   (resp_xfer),
+      .cu_take_o     (cu_take),
+      .cu_load_o     (cu_load),
+      .cu_idx_o      (cu_idx),
+      .cu_data_o     (cu_data),
+      .cu_resume_o   (cu_resume),
+      .relatch_o     (relatch),
+      .relatch_word_o(relatch_word),
+      .relatch_cond_o(relatch_cond)
   );
 
 endmodule

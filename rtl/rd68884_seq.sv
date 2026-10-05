@@ -64,7 +64,30 @@ module rd68884_seq #(
     output logic [5:0]  restore_xfer_o,
     output logic        fpiar_we_o,
     output logic [31:0] fpiar_o,
-    output logic        clear_o
+    output logic        clear_o,
+
+    // ---- RD68885: the conversion unit (rd68884_biu, doc/rd68885.md) ------
+    input  logic        abort_ab_i,
+    input  logic        cu_ready_i,
+    input  logic        cu_valid_i,
+    input  logic        cu_mid_i,
+    input  logic [15:0] cu_word_i,
+    input  logic [31:0] cu_d0_i,
+    input  logic [31:0] cu_d1_i,
+    input  logic [31:0] cu_d2_i,
+    input  logic [31:0] cu_w0_i,
+    input  logic [31:0] cu_w1_i,
+    output logic        apu_run_o,
+    output logic        pcen_o,
+    output logic [1:0]  resp_xfer_o,
+    output logic        cu_take_o,
+    output logic        cu_load_o,
+    output logic [2:0]  cu_idx_o,
+    output logic [31:0] cu_data_o,
+    output logic        cu_resume_o,
+    output logic        relatch_o,
+    output logic [15:0] relatch_word_o,
+    output logic        relatch_cond_o
 );
 
   // ==========================================================================
@@ -81,6 +104,9 @@ module rd68884_seq #(
       (MODEL == 68882) ? rd68884_ucode_pkg::ENTRY82_ABORT : rd68884_ucode_pkg::ENTRY_ABORT;
   localparam logic [rd68884_ucode_pkg::UA-1:0] E_RESTORE =
       (MODEL == 68882) ? rd68884_ucode_pkg::ENTRY82_RESTORE : rd68884_ucode_pkg::ENTRY_RESTORE;
+  // The MC68882's AB (FPU 7.2.2): the abort that keeps a pending exception.
+  localparam logic [rd68884_ucode_pkg::UA-1:0] E_ABORT_AB =
+      (MODEL == 68882) ? rd68884_ucode_pkg::ENTRY82_ABORT_AB : rd68884_ucode_pkg::ENTRY_ABORT;
   localparam logic [15:0] F_IDLE = (MODEL == 68882) ? rd68884_pkg::FRAME82_IDLE : rd68884_pkg::FRAME_IDLE;
   localparam logic [15:0] F_BUSY = (MODEL == 68882) ? rd68884_pkg::FRAME82_BUSY : rd68884_pkg::FRAME_BUSY;
 
@@ -195,6 +221,7 @@ module rd68884_seq #(
   logic        exc_pend;
   logic        null_state;
   logic        pcode;
+  logic        run;              // RD68885: a released instruction computes
   logic        ev_resp_q, ev_rsel_q, ev_save_q;
   logic        restore_req_q;
 
@@ -210,9 +237,10 @@ module rd68884_seq #(
   logic [rd68884_ucode_pkg::UA-1:0] trap_addr;
   always_comb begin
     restore_rise = restore_req_i & ~restore_req_q;
-    trap      = arch_reset_i | abort_i | restore_rise;
+    trap      = arch_reset_i | abort_i | abort_ab_i | restore_rise;
     trap_addr = arch_reset_i ? E_RESET :
                 abort_i      ? E_ABORT :
+                abort_ab_i   ? E_ABORT_AB :
                                E_RESTORE;
   end
 
@@ -319,6 +347,12 @@ module rd68884_seq #(
       // A busy frame's sequencer word (doc/microcode.md).
       rd68884_ucode_pkg::TSRC_SEQST: tbus = {stack_top, mask, rn, is_cond, exc_pend,
                                              ev_resp, ev_rsel, 5'd0};
+      // RD68885: the conversion unit's frame word IMM[2:0] (doc/model.md).
+      rd68884_ucode_pkg::TSRC_CU:    tbus = (f_imm[2:0] == 3'd0) ? cu_w0_i :
+                                            (f_imm[2:0] == 3'd1) ? cu_w1_i :
+                                            (f_imm[2:0] == 3'd2) ? cu_d0_i :
+                                            (f_imm[2:0] == 3'd3) ? cu_d1_i :
+                                            (f_imm[2:0] == 3'd4) ? cu_d2_i : 32'hFFFF_FFFF;
       default:                       tbus = 32'hFFFF_FFFF;
     endcase
   end
@@ -739,6 +773,10 @@ module rd68884_seq #(
       rd68884_ucode_pkg::COND_K_POS:      cond_raw = ~mask[6] & (mask[5:0] != 6'd0);
       rd68884_ucode_pkg::COND_Q_ODD:      cond_raw = c[0];
       rd68884_ucode_pkg::COND_A_POW2:     cond_raw = (a_mant == {1'b1, 71'd0});
+      rd68884_ucode_pkg::COND_PCODE:      cond_raw = pcode;
+      rd68884_ucode_pkg::COND_CU_READY:   cond_raw = cu_ready_i;
+      rd68884_ucode_pkg::COND_CU_VALID:   cond_raw = cu_valid_i;
+      rd68884_ucode_pkg::COND_CU_MID:     cond_raw = cu_mid_i;
       default:                            cond_raw = 1'b0;
     endcase
     cond = cond_raw ^ f_neg;
@@ -855,6 +893,17 @@ module rd68884_seq #(
     fpiar_we_o     = ~trap & (f_biu == rd68884_ucode_pkg::BIU_FPIAR_WR);
     fpiar_o        = tbus;
     clear_o        = ~trap & (f_biu == rd68884_ucode_pkg::BIU_CLEAR);
+    apu_run_o      = run;
+    pcen_o         = pcen;
+    resp_xfer_o    = f_xfer[1:0];
+    cu_take_o      = ~trap & (f_biu == rd68884_ucode_pkg::BIU_CU_TAKE);
+    cu_resume_o    = ~trap & (f_biu == rd68884_ucode_pkg::BIU_CU_RESUME);
+    relatch_o      = ~trap & (f_biu == rd68884_ucode_pkg::BIU_RELATCH);
+    relatch_word_o = cmd;
+    relatch_cond_o = is_cond;
+    cu_load_o      = ~trap & (f_tdst == rd68884_ucode_pkg::TDST_CU);
+    cu_idx_o       = f_imm[2:0];
+    cu_data_o      = tbus;
   end
 
   // ==========================================================================
@@ -1149,6 +1198,7 @@ module rd68884_seq #(
       exc_pend      <= 1'b0;
       null_state    <= 1'b0;
       pcode         <= 1'b0;
+      run           <= 1'b0;
       ev_resp_q     <= 1'b0;
       ev_rsel_q     <= 1'b0;
       ev_save_q     <= 1'b0;
@@ -1160,6 +1210,7 @@ module rd68884_seq #(
         ev_resp_q <= ev_resp;
         ev_rsel_q <= ev_rsel;
         ev_save_q <= ev_save;
+        run       <= 1'b0;
       end else begin
         // The sticky events, re-armed by the action that awaits the next.
         ev_resp_q <= ev_resp & (f_resp == rd68884_ucode_pkg::RESP_NONE);
@@ -1196,6 +1247,14 @@ module rd68884_seq #(
         if (f_biu == rd68884_ucode_pkg::BIU_CMD_ACK) begin
           cmd     <= cmd_word_i;
           is_cond <= cmd_cond_i;
+        end
+        if (f_biu == rd68884_ucode_pkg::BIU_CU_TAKE) begin
+          // The CU's instruction: its command word and its operand.
+          cmd     <= cu_word_i;
+          is_cond <= 1'b0;
+          xi0     <= cu_d0_i;
+          xi1     <= cu_d1_i;
+          xi2     <= cu_d2_i;
         end
 
         // ---- the arithmetic registers ---------------------------------------
@@ -1283,6 +1342,8 @@ module rd68884_seq #(
           rd68884_ucode_pkg::FLAG_PEND_CMD:  pcode   <= 1'b1;
           rd68884_ucode_pkg::FLAG_SET_COND:  is_cond <= 1'b1;
           rd68884_ucode_pkg::FLAG_CLR_COND:  is_cond <= 1'b0;
+          rd68884_ucode_pkg::FLAG_SET_RUN:   run     <= 1'b1;
+          rd68884_ucode_pkg::FLAG_CLR_RUN:   run     <= 1'b0;
           default: ;
         endcase
 

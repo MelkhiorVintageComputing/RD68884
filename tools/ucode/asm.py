@@ -140,7 +140,7 @@ def gen_pkg(labels, width, labels82=None):
                  f"{fields.UADDR_BITS}'d{labels[e]};")
     if labels82 is not None:
         o.append('  // The MC68882 program (RD68885)')
-        for e in ENTRIES:
+        for e in ENTRIES + ['abort_ab']:
             o.append(f"  localparam logic [{fields.UADDR_BITS - 1}:0] ENTRY82_{e.upper()} = "
                      f"{fields.UADDR_BITS}'d{labels82[e]};")
     o += ['', 'endpackage', '']

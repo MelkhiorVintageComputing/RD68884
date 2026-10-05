@@ -96,6 +96,10 @@ package rd68884_ucode_pkg;
   localparam logic [6:0] COND_Q_ODD = 7'd63;
   localparam logic [6:0] COND_A_POW2 = 7'd64;
   localparam logic [6:0] COND_REST_BUSY = 7'd65;
+  localparam logic [6:0] COND_CU_READY = 7'd66;
+  localparam logic [6:0] COND_CU_VALID = 7'd67;
+  localparam logic [6:0] COND_CU_MID = 7'd68;
+  localparam logic [6:0] COND_PCODE = 7'd69;
 
   localparam int F_IDX_LSB = 11;
   localparam int F_IDX_W   = 2;
@@ -146,6 +150,9 @@ package rd68884_ucode_pkg;
   localparam logic [3:0] BIU_RESTORE_WR = 4'd6;
   localparam logic [3:0] BIU_FPIAR_WR = 4'd7;
   localparam logic [3:0] BIU_CLEAR = 4'd8;
+  localparam logic [3:0] BIU_CU_TAKE = 4'd9;
+  localparam logic [3:0] BIU_CU_RESUME = 4'd10;
+  localparam logic [3:0] BIU_RELATCH = 4'd11;
 
   localparam int F_XFER_LSB = 54;
   localparam int F_XFER_W   = 6;
@@ -166,6 +173,7 @@ package rd68884_ucode_pkg;
   localparam logic [3:0] TSRC_RESTW = 4'd11;
   localparam logic [3:0] TSRC_ONES = 4'd12;
   localparam logic [3:0] TSRC_SEQST = 4'd13;
+  localparam logic [3:0] TSRC_CU = 4'd14;
 
   localparam int F_TDST_LSB = 64;
   localparam int F_TDST_W   = 4;
@@ -179,6 +187,7 @@ package rd68884_ucode_pkg;
   localparam logic [3:0] TDST_CMD = 4'd7;
   localparam logic [3:0] TDST_FLAGS = 4'd8;
   localparam logic [3:0] TDST_SEQST = 4'd9;
+  localparam logic [3:0] TDST_CU = 4'd10;
 
   localparam int F_RF_LSB = 68;
   localparam int F_RF_W   = 2;
@@ -357,15 +366,18 @@ package rd68884_ucode_pkg;
   localparam logic [3:0] FLAG_CLR_COND = 4'd10;
   localparam logic [3:0] FLAG_SET_STK = 4'd11;
   localparam logic [3:0] FLAG_CLR_STK = 4'd12;
+  localparam logic [3:0] FLAG_SET_RUN = 4'd13;
+  localparam logic [3:0] FLAG_CLR_RUN = 4'd14;
 
   localparam logic [11:0] ENTRY_RESET = 12'd0;
   localparam logic [11:0] ENTRY_ABORT = 12'd7;
-  localparam logic [11:0] ENTRY_RESTORE = 12'd2666;
+  localparam logic [11:0] ENTRY_RESTORE = 12'd2668;
   localparam logic [11:0] ENTRY_ILLEGAL = 12'd6;
   // The MC68882 program (RD68885)
   localparam logic [11:0] ENTRY82_RESET = 12'd0;
   localparam logic [11:0] ENTRY82_ABORT = 12'd7;
-  localparam logic [11:0] ENTRY82_RESTORE = 12'd2714;
+  localparam logic [11:0] ENTRY82_RESTORE = 12'd2741;
   localparam logic [11:0] ENTRY82_ILLEGAL = 12'd6;
+  localparam logic [11:0] ENTRY82_ABORT_AB = 12'd8;
 
 endpackage

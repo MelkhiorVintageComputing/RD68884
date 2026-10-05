@@ -94,6 +94,16 @@ module biu_tb;
   logic        restore_req, resp_read, rsel_read, save_read, abort, pv;
   logic [15:0] cmd_word, restore_word;
   logic [31:0] opw_data, fpiar;
+  // RD68885's conversion unit: the sequencer's side, driven by the tests.
+  logic        apu_run = 0, pcen = 0, cu_take = 0, cu_load = 0, cu_resume = 0, relatch = 0;
+  logic        relatch_cond = 0;
+  logic [1:0]  resp_xfer = 0;
+  logic [2:0]  cu_idx = 0;
+  logic [31:0] cu_data = 0;
+  logic [15:0] relatch_word = 0;
+  logic        abort_ab, cu_ready, cu_valid, cu_mid;
+  logic [15:0] cu_word;
+  logic [31:0] cu_d0, cu_d1, cu_d2, cu_w0, cu_w1;
 
 `ifdef BIU_SYNC
   rd68884_biu #(.BUS_SYNC(1), .BUS_SYNC_WAIT(`BIU_SYNC_WAIT), .MODEL(`BIU_MODEL)) dut (
@@ -120,7 +130,13 @@ module biu_tb;
       .restore_xfer_i(restore_xfer), .clear_i(clear),
       .fpiar_o(fpiar), .fpiar_we_i(fpiar_we), .fpiar_i(fpiar_v),
       .resp_read_o(resp_read), .rsel_read_o(rsel_read), .save_read_o(save_read),
-      .abort_o(abort), .pv_o(pv));
+      .abort_o(abort), .pv_o(pv),
+      .apu_run_i(apu_run), .pcen_i(pcen), .resp_xfer_i(resp_xfer), .cu_take_i(cu_take),
+      .cu_load_i(cu_load), .cu_idx_i(cu_idx), .cu_data_i(cu_data), .cu_resume_i(cu_resume),
+      .relatch_i(relatch), .relatch_word_i(relatch_word), .relatch_cond_i(relatch_cond),
+      .abort_ab_o(abort_ab), .cu_ready_o(cu_ready), .cu_valid_o(cu_valid), .cu_mid_o(cu_mid),
+      .cu_word_o(cu_word), .cu_d0_o(cu_d0), .cu_d1_o(cu_d1), .cu_d2_o(cu_d2),
+      .cu_w0_o(cu_w0), .cu_w1_o(cu_w1));
 
   // ==========================================================================
   // Bookkeeping
@@ -137,12 +153,13 @@ module biu_tb;
     end
   endtask
 
-  integer n_resp_read = 0, n_rsel_read = 0, n_save_read = 0, n_abort = 0;
+  integer n_resp_read = 0, n_rsel_read = 0, n_save_read = 0, n_abort = 0, n_abort_ab = 0;
   always @(posedge clk) begin
     if (resp_read) n_resp_read++;
     if (rsel_read) n_rsel_read++;
     if (save_read) n_save_read++;
     if (abort)     n_abort++;
+    if (abort_ab)  n_abort_ab++;
   end
 
   // ==========================================================================
@@ -783,10 +800,34 @@ module biu_tb;
 
   task automatic t_instaddr();
     where = "fpiar";
-    wr(5'h18, 4, 32'h0001_2344);
-    idle(1);
-    check(fpiar == 32'h0001_2344, "instruction address CIR writes FPIAR");
-    check(!pv, "never a violation (FPU 6.1.12)");
+    if (`BIU_MODEL == 68882) begin
+      // The MC68882 (FPU 7.2.10, 6.1.12): the PC only when asked for, and
+      // then before anything else.
+      wr(5'h18, 4, 32'h0001_2344);
+      idle(1);
+      check(pv, "MC68882: an unasked PC is a violation");
+      wr(5'h02, 2, 32'h0002);
+      idle(1);
+      seq_resp(16'h4900, 1'b0, E_CMD);
+      rd_check(5'h00, 2, 32'h4900, "release, pass the PC");
+      wr(5'h18, 4, 32'h0001_2344);
+      idle(1);
+      check(fpiar == 32'h0001_2344, "the PC asked for writes FPIAR");
+      check(!pv, "the PC asked for is no violation");
+      rd_check(5'h00, 2, 32'h4900, "the response stays");
+      seq_resp(16'h4900, 1'b0, E_CMD);
+      rd_check(5'h00, 2, 32'h4900, "release, pass the PC again");
+      wr(5'h0A, 2, 32'h4822);
+      idle(1);
+      check(pv, "MC68882: a command instead of the PC asked for is a violation");
+      wr(5'h02, 2, 32'h0002);
+      idle(1);
+    end else begin
+      wr(5'h18, 4, 32'h0001_2344);
+      idle(1);
+      check(fpiar == 32'h0001_2344, "instruction address CIR writes FPIAR");
+      check(!pv, "never a violation (FPU 6.1.12)");
+    end
   endtask
 
   // An 8-bit port reads the response in two cycles; a rewrite between them
@@ -823,9 +864,10 @@ module biu_tb;
     if (`BIU_MODEL == 68882) begin
       check(n_abort == n0, "MC68882: XA does not abort a floating-point exception");
       rd_check(5'h00, 2, 32'h1C32, "MC68882: the exception stays reported");
+      n0 = n_abort_ab;
       wr(5'h02, 2, 32'h0001);                       // AB
       idle(2);
-      check(n_abort == n0 + 1, "MC68882: AB aborts");
+      check(n_abort_ab == n0 + 1, "MC68882: AB ends the instruction in its window");
     end else begin
       check(n_abort == n0 + 1, "MC68881: any control write aborts");
     end
@@ -836,6 +878,112 @@ module biu_tb;
     idle(2);
     check(n_abort == n0 + 1, "XA clears an F-line on either model");
     rd_check(5'h00, 2, 32'h0802, "idle after the F-line acknowledge");
+  endtask
+
+  // RD68885's conversion unit (doc/rd68885.md; tools/iss/biu.py is the
+  // definition). The sequencer's side is scripted: apu_run for "the APU
+  // computes a released instruction", cu_take for the microcode taking the
+  // CU's instruction.
+  task automatic seq_pulse(input integer which);    // 0 take, 1 resume, 2 relatch
+    @(posedge clk);
+    if (which == 0) cu_take <= 1'b1;
+    if (which == 1) cu_resume <= 1'b1;
+    if (which == 2) relatch <= 1'b1;
+    @(posedge clk);
+    cu_take <= 1'b0; cu_resume <= 1'b0; relatch <= 1'b0;
+    @(negedge clk);
+  endtask
+
+  task automatic seq_cu_load(input logic [2:0] k, input logic [31:0] v);
+    @(posedge clk);
+    cu_idx <= k; cu_data <= v; cu_load <= 1'b1;
+    @(posedge clk);
+    cu_load <= 1'b0;
+    @(negedge clk);
+  endtask
+
+  task automatic t_cu();
+    integer n0_ab, n0_a;
+    where = "CU";
+    if (`BIU_MODEL == 68882) begin
+      apu_run = 1'b1;
+      // FADD.D <ea>,FP1 while the APU computes: the CU answers $1608
+      // (figure 7-19), takes the operand, and releases (CA = 0).
+      wr(5'h0A, 2, 32'h5422);
+      rd_check(5'h00, 2, 32'h1608, "the CU's evaluate <ea>, CA = 0");
+      check(!cmd_pend, "the CU took it, not the latch");
+      wr(5'h10, 4, 32'h4000_0000);
+      wr(5'h10, 4, 32'h0000_0001);
+      idle(1);
+      check(cu_valid && cu_ready, "held, ready for the APU");
+      check(cu_d0 == 32'h4000_0000 && cu_d1 == 32'h0000_0001, "the operand");
+      check(cu_w0 == 32'h5422_5F00, $sformatf("the frame word: $%0h", cu_w0));
+      // A third instruction is latched (FPU 5.1.1.2).
+      wr(5'h0A, 2, 32'h4423);                       // FMUL.S <ea>,FP0
+      rd_check(5'h00, 2, 32'h8900, "a third waits");
+      check(cmd_pend, "latched");
+      // The sequencer takes the CU's; the CU takes the latched one.
+      seq_pulse(0);
+      idle(2);
+      check(!cmd_pend && cu_valid, "the latched one went to the CU");
+      rd_check(5'h00, 2, 32'h1504, "its evaluate <ea>, CA = 0");
+      wr(5'h10, 4, 32'h3F80_0000);
+      idle(1);
+      check(cu_ready, "ready");
+      seq_pulse(0);
+      check(!cu_valid, "taken");
+      // FMOVE.L <ea>,FP2: CA = 1, then $8900 until the take, then $0900.
+      wr(5'h0A, 2, 32'h4100);
+      rd_check(5'h00, 2, 32'h9504, "B, W, L: CA = 1");
+      wr(5'h10, 4, 32'h0000_0007);
+      rd_check(5'h00, 2, 32'h8900, "waits for the APU");
+      check(cu_ready && cu_mid, "ready, still in its dialog");
+      seq_pulse(0);
+      rd_check(5'h00, 2, 32'h0900, "released at the take");
+      // The PC (FPU 7.2.10): register to register with an exception
+      // enabled; the PC goes with the instruction, to FPIAR at the take.
+      pcen = 1'b1;
+      wr(5'h0A, 2, 32'h0422);
+      rd_check(5'h00, 2, 32'h4900, "release, pass the PC");
+      check(!cu_ready, "not before its PC");
+      wr(5'h18, 4, 32'h0000_2468);
+      idle(1);
+      check(cu_ready && cu_w1 == 32'h0000_2468, "with its PC");
+      check(fpiar != 32'h0000_2468, "FPIAR is the APU's");
+      seq_pulse(0);
+      idle(1);
+      check(fpiar == 32'h0000_2468, "the PC reaches FPIAR at the take");
+      pcen = 1'b0;
+      // AB in the CU's dialog (FPU 7.2.2): only its instruction ends.
+      wr(5'h0A, 2, 32'h4822);
+      rd_check(5'h00, 2, 32'h160C, "X: CA = 0");
+      n0_ab = n_abort_ab; n0_a = n_abort;
+      wr(5'h02, 2, 32'h0001);
+      idle(2);
+      check(!cu_valid && n_abort == n0_a && n_abort_ab == n0_ab, "the CU's instruction alone ends");
+      rd_check(5'h00, 2, 32'h0900, "the APU still computes");
+      // FRESTORE of a busy frame with the CU mid-transfer: its words back,
+      // then its dialog (cu_resume).
+      apu_run = 1'b0;
+      seq_cu_load(3'd0, 32'h5422_1F01);              // FADD.D, one long word to come
+      seq_cu_load(3'd2, 32'h4000_0000);
+      seq_pulse(1);
+      rd_check(5'h00, 2, 32'h0900, "the CU's dialog back");
+      wr(5'h10, 4, 32'h0000_0001);
+      idle(1);
+      check(cu_ready && cu_d1 == 32'h0000_0001, "completed");
+      seq_pulse(0);
+      // An empty CU in a frame is all ones.
+      seq_cu_load(3'd0, 32'hFFFF_FFFF);
+      check(!cu_valid && cu_w0 == 32'hFFFF_FFFF, "empty");
+      // RELATCH: a pending instruction back in the latch.
+      relatch_word = 16'h4422; relatch_cond = 1'b0;
+      seq_pulse(2);
+      check(cmd_pend && cmd_word == 16'h4422, "re-latched");
+      rd_check(5'h00, 2, 32'h8900, "waiting");
+      ack_cmd();
+      seq_resp(16'h0802, 1'b0, E_CMD);
+    end
   endtask
 
   task automatic t_arch_reset();
@@ -979,6 +1127,7 @@ module biu_tb;
         t_split_read();
         t_m4();
         t_control();
+        t_cu();
         t_arch_reset();
       end
     end

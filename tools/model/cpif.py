@@ -80,6 +80,7 @@ class Dialog:
     released: bool = False        # the MPU has been let go (computing alone)
     trap: int = 0                 # FMOVE out: vector of a mid-instruction exception
     iaddr: Optional[int] = None   # FPU882: the PC the MPU passed for it (FPU 7.2.10)
+    read: bool = False            # FPU882: a take-exception primitive has been read
 
     def first_prim(self):
         for i, s in enumerate(self.steps):
@@ -957,8 +958,12 @@ class FPU882(FPU881):
         r = self.resp
         if self.pv:
             return r
+        if self._is_take(self.dialog) and r == self.dialog.steps[0][1]:
+            self.dialog.read = True
         d = self._bd()
         if d is None:
+            if self._is_take(self.dialog) and r >> 14 & 1 and r == self.dialog.steps[0][1]:
+                self.pc_expect = self.dialog        # BSUN's PC
             return r
         step = d.steps[d.pc]
         if step[0] == 'prim' and r == step[1]:
@@ -999,15 +1004,19 @@ class FPU882(FPU881):
         return d is not None and len(d.steps) == 1 and d.steps[0][2] is None
 
     def _save(self):
-        """FPU 6.4.3, table 6-5. A take-exception primitive is not an
-        instruction: the MPU starts the instruction again after the handler."""
+        """FPU 6.4.3, table 6-5. A take-exception primitive the MPU has
+        read is not an instruction: the MPU starts the instruction again
+        after the handler. One not yet read is the instruction it answers,
+        pending, and FRESTORE starts it again (as on the MC68881)."""
         if self.frame is not None:
             return FW_INVALID
         if self.null_state:
             return FW_NULL
         if self.busy:
             return FW_AGAIN
-        d = None if self._is_take(self.dialog) else self.dialog
+        d = self.dialog
+        if self._is_take(d) and d.read:
+            d = None
         cu_mid = self.cu is not None and not self.cu.released
         fresh = d is not None and d.pc == d.first_prim()
         if not self.pv and (cu_mid or (d is not None and not fresh)):
