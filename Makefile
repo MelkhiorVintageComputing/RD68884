@@ -309,7 +309,7 @@ sim: dirs
 # Not in `check`: it needs that repository, and minutes.
 # ---------------------------------------------------------------------------
 RD68021     ?= ../RD68021
-RD68021_REV ?= dda5ee6
+RD68021_REV ?= a738237
 RD68021_TME_REV ?= 6d91ae5
 RDSRC       := $(BUILD)/rd68021-$(RD68021_REV)
 RDTME       := $(BUILD)/rd68021-$(RD68021_TME_REV)

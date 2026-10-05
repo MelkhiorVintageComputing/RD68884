@@ -40,7 +40,12 @@ Every instruction of the MC68881 is implemented and every coprocessor dialog wor
 
 At 50 MHz it runs alongside a 16.67–33 MHz bus. A slower core only adds wait states (`doc/size-and-speed.md`).
 
-**Clock counts** are measured against FPU section 8 for 264 instructions (`doc/timing-divergences.md`). With the core at three times the bus clock, the transcendentals take about a third of the MC68881's bus clocks, FDIV and FSQRT about half, and packed decimal input about a sixth. The interface-bound instructions take longer on RD68021, whose coprocessor protocol is slower than an MC68020's.
+**Clock counts** are measured against FPU section 8 for 264 instructions (`doc/timing-divergences.md`). With the core at three times the bus clock, over the 264 instructions RD68884 on RD68021 takes 28% of the MC68881's bus clocks:
+- the transcendentals about a third;
+- FDIV and FSQRT a half and two fifths;
+- packed decimal input about a sixth;
+- the control registers and FMOVEM about the same as the manual;
+- the conditionals, FSAVE and FRESTORE still longer: RD68021's handling of the protocol, and FSAVE's come-again.
 
 **Build options:**
 
