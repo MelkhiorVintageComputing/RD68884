@@ -194,6 +194,11 @@ class MPU:
         self.fpu.write(CIR_COMMAND, cmd)
         return self._service(ea)
 
+    def resume(self, ea=None):
+        """RTE from a mid-instruction stack frame: read the response again
+        and go on with the instruction (UM 7.4.1)."""
+        return self._service(ea)
+
     def fcond(self, pred):
         """cpBcc/cpScc/cpDBcc/cpTRAPcc: returns the TF bit."""
         self.fpu.write(CIR_CONDITION, pred)

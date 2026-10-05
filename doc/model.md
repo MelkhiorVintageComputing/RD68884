@@ -9,14 +9,14 @@
 | `packed.py` | Packed decimal in and out, with the k-factor |
 | `arith.py` | Every general instruction: results, the EXC/AEXC/CC/quotient bytes, trap vectors, the exceptional operand |
 | `transcend.py` | Mathematical reference values (mpmath) and the FMOVECR constant ROM |
-| `cpif.py` | The coprocessor interface at the level of CIR accesses: primitives, dialogs, protocol violations, FSAVE/FRESTORE frames |
+| `cpif.py` | The coprocessor interface at the level of CIR accesses: primitives, dialogs, protocol violations, FSAVE/FRESTORE frames. `FPU881`, and `FPU882` for RD68885 (below) |
 | `mpu.py` | The MC68020's side of the interface, for driving `cpif.py` and the ISS through the same dialogs |
 
 ## How they are checked
 
 | Run | Coverage |
 |---|---|
-| `make model-test` | 64 unit tests, each tied to a passage of the manual; part of `make check` |
+| `make model-test` | 80 unit tests, each tied to a passage of the manual; part of `make check` |
 | `make testfloat` | `arith.py` against Berkeley TestFloat, 3000 vectors per function and rounding mode |
 | `make testfloat-full` | The same with every level-1 vector: about 4.6 million, all passing |
 
@@ -35,7 +35,7 @@
 
 ## Model choices
 
-These are places where the manual is silent or contradicts itself. Each is marked `MODEL CHOICE` in the code, or listed in `doc/manual-contradictions.md`. All are to be revisited when an oracle (TME's MC68881, mh882, real hardware) says otherwise.
+These are places where the manual is silent or contradicts itself. Each is marked `MODEL CHOICE` in the code, or listed in `doc/manual-contradictions.md`. All are to be revisited when an oracle (TME's MC68881, real hardware) says otherwise.
 
 | Where | Choice |
 |---|---|
@@ -97,3 +97,49 @@ On FRESTORE, a pending instruction is restarted from its command word, so the ma
 **While a computation runs**, FSAVE answers come-again until it finishes, then saves an idle frame.
 
 The microcode's busy frame has its own layout (doc/microcode.md); the frame is opaque, so the two are compared by what they do, not by their bytes (`tools/iss/tests/test_busy.py`).
+
+## The MC68882 (`FPU882`)
+
+`FPU882` is `FPU881` with a conversion unit (CU) beside the APU (FPU 5.1.1.2). It models stage A of doc/rd68885.md.
+
+**What it does, from the manual:**
+- **The CU.** While the APU computes, the CU takes the next instruction if it is register to register (FMOVECR included) or opclass 010 with a B, W, L, S, D or X source. It runs that instruction's dialog with the main processor, then waits to hand it to the APU.
+- **S, D and X sources** come in with the CA = 0 evaluate-EA primitive (`$1504`, `$1608`, `$160C`; `$55xx` with PC), whether the APU is busy or not (figure 7-19). The main processor goes on after the operand, without reading the response again.
+- **B, W and L sources** are fetched with CA = 1. The null (CA = 1, IA = 1) primitive follows until the APU takes the instruction.
+- **Everything else** is latched and answered with the null (CA = 1, IA = 1) primitive until it can start (FPU 7.2.6): packed sources, FMOVE out, FMOVEM, the control registers, the conditionals, and a third instruction while the CU is occupied. A conditional starts only when the APU and the CU are both empty (table 5-6).
+- **Exceptions persist.** The exception acknowledge (XA) leaves a floating-point exception reported. FSAVE clears it, or a frame restored with EXC PEND inactive (FPU 7.2.2, 7.4.2.5). If the main processor starts an instruction again without clearing it, it is told again.
+- **Mid-instruction reports.** An exception from the APU's instruction is reported mid-instruction (`$1D3x`) by an instruction in the CU whose dialog is not finished (FPU 6.1, the FMUL.B example). Otherwise, the next instruction reports it pre-instruction.
+- **The abort bit.** AB (bit 0 of the control CIR) aborts only the last instruction received; the APU's goes on (FPU 7.2.2).
+- **The PC is mandatory.** Once a primitive asks for it, any other access in the lists of FPU 6.1.12 is a protocol violation, and so is an unasked write to the instruction address CIR.
+- **FPIAR** changes when an instruction reaches the APU, not when its PC is passed (FPU 7.2.10).
+
+**Model choices:**
+
+| Where | Choice |
+|---|---|
+| An exception raised while the CU holds an instruction | The CU does not hand it over until FSAVE takes it away, or a frame with EXC PEND inactive is restored. The handler runs before the next instruction does, and the order is kept (FPU 6.1: "one at a time") |
+| FMOVEM or a control-register move while an exception holds an instruction in the CU | Reports the exception, as an arithmetic instruction would. Going ahead would show it the registers before the CU's instruction has run. With the CU empty they do not report, as on the MC68881 (FPU 6.4.2.2) |
+| The idle response | `$0802` (PF = 1) only when the APU and the CU are both empty; `$0900` otherwise |
+| AB outside its window (FPU 7.2.2: "undefined") | The BIU returns to idle; the APU and a released CU instruction are untouched |
+| A take-exception primitive at FSAVE | Not saved as a pending instruction: the main processor starts the instruction again after the handler |
+
+**Idle frame `$1F38`.** The MC68881's layout, with the CU's eight long words after the command word (FPU figure 6-5):
+
+| Offset | Contents |
+|---|---|
+| $04 | Command/condition word, then `$FFFF` |
+| $08 | CU: its command word (31–16); bit 15 is 0 if the CU holds an instruction; bit 14 set if it has released the main processor; bit 13 set if its PC was passed; bits 12–8 ones; bits 7–0 the operand long words still to come |
+| $0C | CU: the PC passed, or all ones |
+| $10–$1B | CU: the operand long words received, then all ones |
+| $1C–$27 | All ones |
+| $28–$33 | The exceptional operand |
+| $34 | All ones: the operand register image |
+| $38 | The BIU flags |
+
+An empty CU is eight long words of ones. FSAVE finds an instruction in the CU only when an exception holds it there; otherwise FSAVE answers come-again until the CU's instruction has gone through the APU.
+
+**Busy frame `$1FD4`, 212 bytes.** This is opaque, like the MC68881's. The CU's eight long words come first (FPU 6.4.2), then the tag, the response CIR, the dialog, the exceptional operand and the buffered long words. The BIU flags are the last long word, where figure 5-6's handler sets EXC PEND (`BSET #3,(SP,D0)`, with D0 the frame's size). A busy frame is taken when a dialog is part-way through, either the APU's or the CU's. The CU's case includes the mid-instruction report above.
+
+**How it is checked** (`tools/model/tests/test_882.py`):
+- the dialogs, primitive by primitive, against the passages above;
+- 600 random programs of 30 instructions each, run on `FPU881` and on `FPU882` with an APU slow enough that every instruction overlaps the one before. Half run with exceptions enabled, and each exception goes through figure 5-6's handler. The two runs must end with the same registers, memory, values stored, conditions, and exceptions (vector and FPIAR).

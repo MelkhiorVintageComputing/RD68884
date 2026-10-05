@@ -79,6 +79,7 @@ class Dialog:
     dreg: int = 0                 # the main-processor register value received
     released: bool = False        # the MPU has been let go (computing alone)
     trap: int = 0                 # FMOVE out: vector of a mid-instruction exception
+    iaddr: Optional[int] = None   # FPU882: the PC the MPU passed for it (FPU 7.2.10)
 
     def first_prim(self):
         for i, s in enumerate(self.steps):
@@ -648,6 +649,516 @@ class FPU881:
         nd = w[9] & 0xFF
         d.released = bool(w[9] >> 8 & 1)
         d.data = w[10:10 + nd]
+
+
+# -----------------------------------------------------------------------------
+# The MC68882 (doc/rd68885.md)
+# -----------------------------------------------------------------------------
+FW82_IDLE, FW82_BUSY = 0x1F38, 0x1FD4          # FPU table 6-6
+IDLE82_LONGS, BUSY82_LONGS, CU_LONGS = 14, 53, 8
+
+
+def prim_eval_ea0(to_fpu, pc, valid_ea, length):
+    """Evaluate effective address and transfer data with CA = 0 (FPU table
+    7-7, figures 7-19 and 7-21): the MPU does not read the response after
+    the transfer."""
+    return (pc << 14) | ((0 if to_fpu else 1) << 13) | 0x1000 | (valid_ea << 8) | length
+
+
+def is_fp_take(resp):
+    """A take pre- or mid-instruction exception primitive for a floating-point
+    exception, vectors 48-54: the ones an MC68882 keeps reporting past the
+    exception acknowledge (FPU 7.2.2, 7.4.2.5). rtl/rd68884_biu.sv's
+    fp_exc_resp."""
+    return (resp >> 9 & 0x1F) == 0b01110 and 48 <= (resp & 0xFF) <= 54
+
+
+class FPU882(FPU881):
+    """The MC68882: an MC68881 with a conversion unit (CU) beside the APU.
+
+    FPU 5.1.1.2: while the APU executes one instruction, the CU takes the
+    next. Its dialog runs with the main processor, and it waits to hand the
+    instruction to the APU. In this model (stage A of doc/rd68885.md) the CU
+    takes register-to-register instructions and opclass 010 with a B, W, L,
+    S, D or X source. Everything else is latched and answered with the null
+    (CA=1, IA=1) primitive until it can start (FPU 7.2.6).
+
+    MODEL CHOICES (doc/model.md, "The MC68882"):
+    - An exception the APU raises stops the CU's handoff until FSAVE takes
+      the CU's instruction away, or a frame with EXC PEND inactive is
+      restored. The program then still sees the instructions in order: the
+      exception's handler runs before the next instruction does (FPU 6.1:
+      "reports these exceptions, one at a time").
+    - An instruction that does not report exceptions (FMOVEM, FMOVE of a
+      control register; FPU 6.4.2.2) waits for the APU and the CU. When an
+      exception holds an instruction in the CU, it reports the exception,
+      as an arithmetic instruction would: going ahead would let it see the
+      registers before the CU's instruction has run.
+    - The idle response is $0802 (PF = 1) only when the APU and the CU are
+      both empty, and $0900 otherwise.
+    - The CU's words in the state frames are our own layout (FPU 6.4.2.2:
+      "internal state ... should not be modified"); see _cu_words.
+    """
+
+    def reset(self):
+        super().reset()
+        self.cu: Optional[Dialog] = None      # the CU's instruction
+        self.pc_expect: Optional[Dialog] = None   # whose PC the MPU owes us
+
+    # ------------------------------------------------------------ the bus
+    def _read(self, cir):
+        if self.pc_expect is not None and not self.pv and cir in (CIR_OPERAND, CIR_REGSEL):
+            self.pc_expect = None
+            self._violation()                       # FPU 6.1.12 item 4
+            return 0xFFFFFFFF if cir == CIR_OPERAND else 0xFFFF
+        return super()._read(cir)
+
+    def _write(self, cir, v):
+        if self.pc_expect is not None and not self.pv and \
+                cir in (CIR_COMMAND, CIR_CONDITION, CIR_OPERAND, CIR_REGSEL):
+            self.pc_expect = None
+            self._violation()                       # FPU 6.1.12 item 4
+            return
+        if cir == CIR_CONTROL:
+            self._control(v & 0xFFFF)
+        elif cir == CIR_INSTADDR:
+            d = self.pc_expect
+            if d is None:
+                # FPU 6.1.12 items 1-3: only when it was asked for.
+                if not self.pv and self.frame is None:
+                    self._violation()
+                return
+            self.pc_expect = None
+            d.iaddr = v & 0xFFFFFFFF
+            if d is self.dialog:
+                self.st.fpiar = d.iaddr             # it is the APU's (FPU 7.2.10)
+        else:
+            super()._write(cir, v)
+
+    def _expect(self):
+        if self.frame is not None:
+            return 'opr' if self.frame['dir'] == 'save' else 'opw'
+        if self.pc_expect is not None:
+            return 'pc'
+        d = self._bd()
+        if d is None:
+            return 'cmd'
+        return {'opw': 'opw', 'opr': 'opr', 'rsel': 'rsel'}.get(d.steps[d.pc][0], 'resp')
+
+    def _bd(self):
+        """The instruction whose dialog the BIU is in, or None. A persisting
+        take-exception primitive is not one: the MPU starts the instruction
+        again after the handler, and is told again (FPU 7.2.2)."""
+        if self.cu is not None and not self.cu.released:
+            return self.cu
+        d = self.dialog
+        return None if d is None or d.released or self._is_take(d) else d
+
+    # ---------------------------------------------------- the control CIR
+    def _control(self, v):
+        """FPU 7.2.2. AB (bit 0) aborts the last instruction received, and
+        lets a concurrent one finish. XA (bit 1) acknowledges an exception,
+        and clears it unless it is a floating-point one."""
+        if v & 1:
+            if self.latched is not None:
+                self.latched = None
+            elif self.cu is not None and not self.cu.released:
+                self.cu = None
+            elif self.dialog is not None and not self.dialog.released:
+                self.dialog = None
+                self.busy, self.on_done = 0, None
+            self.frame = None
+            self.restore_readback = None
+            self.pv = False
+            self.pc_expect = None
+            self.resp = self._quiet_resp()
+            return
+        if self.pv or not is_fp_take(self.resp):
+            self._abort()
+
+    def _abort(self):
+        super()._abort()
+        self.cu = None
+        self.pc_expect = None
+
+    def _quiet_resp(self):
+        return P_RELEASE if (self.busy or self.cu is not None) else P_IDLE
+
+    # ----------------------------------------------- starting an instruction
+    def _start(self, kind, word):
+        if self.pv:
+            return
+        if self.frame is not None or self._expect() != 'cmd':
+            self._violation()                       # FPU 7.2.6, 7.2.7
+            return
+        self.null_state = False
+        self._dispatch(kind, word)
+
+    def _cu_takes(self, kind, word):
+        """Can the CU take this one while the APU is busy (FPU 5.1.1.2)?"""
+        if kind != 'gen':
+            return False
+        opclass, rx = (word >> 13) & 7, (word >> 10) & 7
+        if opclass == 0:
+            return not word & 0x40
+        if opclass == 2:
+            if rx == 7:
+                return True                         # FMOVECR: register to register
+            return not word & 0x40 and rx != F.FMT_P
+        return False
+
+    def _dispatch(self, kind, word):
+        if self.exc_pend and not self.busy:
+            # The APU is done, with an exception: report it.
+            self.latched = None
+            if self.cu is not None:
+                vec = A.trap_vector((self.st.fpsr >> 8) & 0xFF, self.st.enable) or 49
+                self.dialog = Dialog(kind, word, [('prim', 0x1C00 | vec, None)])
+                self.resp = 0x1C00 | vec
+                return
+            self._begin(kind, word)
+            return
+        if self.busy or self.cu is not None:
+            if self.busy and self.cu is None and self._cu_takes(kind, word):
+                self.latched = None
+                self.cu = Dialog(kind, word, self._cu_steps(word))
+                self._run(self.cu)
+                return
+            self.latched = (kind, word)             # FPU 7.2.6: null until it can start
+            self.resp = P_WAIT
+            return
+        self._begin(kind, word)
+
+    def _cu_steps(self, cmd):
+        """The CU's dialogs. FPU 7.5.1.1 and figure 7-17 (register to
+        register), figure 7-19 (S, D, X: CA = 0), figure 7-18 (B, W, L)."""
+        opclass, rx = (cmd >> 13) & 7, (cmd >> 10) & 7
+        pc = self._pc_bit()
+        tail = [('compute', 'arith'), ('done',)]
+        if opclass == 0 or rx == 7:
+            return [('prim', P_RELEASE_PC if pc else P_RELEASE, 'release'), ('handoff',)] + tail
+        n = F.FMT_BYTES[rx]
+        vea = EA_DATA if n <= 4 else EA_MEM
+        if rx in (F.FMT_S, F.FMT_D, F.FMT_X):
+            return [('prim', prim_eval_ea0(True, pc, vea, n), P_RELEASE),
+                    ('opw', (n + 3) // 4), ('release',), ('handoff',)] + tail
+        return [('prim', prim_eval_ea(True, pc, vea, n), P_WAIT),
+                ('opw', (n + 3) // 4), ('handoff',), ('release',)] + tail
+
+    def _begin_gen(self, cmd):
+        """As the MC68881's, but S, D and X sources come in with CA = 0
+        (FPU 7.5.1.2, figure 7-19)."""
+        opclass, rx = (cmd >> 13) & 7, (cmd >> 10) & 7
+        if opclass == 2 and rx in (F.FMT_S, F.FMT_D, F.FMT_X) and not cmd & 0x40:
+            steps = [s for s in self._cu_steps(cmd) if s[0] != 'handoff']
+            self.dialog = Dialog('gen', cmd, steps)
+            self._run()
+            return
+        super()._begin_gen(cmd)
+
+    # ---------------------------------------------------- the step machine
+    def _run(self, d=None):
+        d = self.dialog if d is None else d
+        while d is not None and d.pc < len(d.steps):
+            op = d.steps[d.pc][0]
+            if op == 'handoff':
+                if d is self.cu:
+                    if self.busy or self.exc_pend or self.dialog is not None:
+                        return                      # FPU 5.1.1.2: waits for the APU
+                    self.cu = None
+                    self.dialog = d
+                    if d.iaddr is not None:
+                        self.st.fpiar = d.iaddr     # it reaches the APU stage
+                d.pc += 1
+                continue
+            if op == 'done':
+                self.dialog = None
+                if self.busy == 0 and self.cu is None and self.latched is None:
+                    self.resp = P_IDLE
+                return
+            if op == 'compute':
+                self._compute(d, d.steps[d.pc][1])
+                return
+            if op in ('prim', 'rsel') or (op in ('opw', 'opr') and self._xfer_waits(d, op)):
+                if op == 'prim':
+                    self.resp = d.steps[d.pc][1]
+                return
+            if op in ('opw', 'opr'):
+                d.pc += 1
+                continue
+            if op == 'release':
+                d.released = True
+                d.pc += 1
+                continue
+            # Everything else is the MC68881's, on the APU's dialog.
+            assert d is self.dialog, op
+            save = d.steps
+            d.steps = d.steps[:d.pc + 1]
+            super()._run()
+            d.steps = save
+            if self.dialog is not d:
+                return
+            if d.pc < len(d.steps) and d.steps[d.pc][0] == op and op in ('end', 'end_out'):
+                return
+
+    def _xfer_waits(self, d, op):
+        if op == 'opr' and not d.count:
+            d.count = len(d.data)
+        elif op == 'opw' and not d.count and not d.data:
+            d.count = d.steps[d.pc][1] if d.steps[d.pc][1] is not None \
+                else 3 * len(self._mask_regs(d))
+        return bool(d.count)
+
+    def _compute(self, d, what):
+        self.busy = max(1, self.latency(d.word))
+        if self.latched is None and (self.cu is None or self.cu.released):
+            self.resp = P_RELEASE if d.released else P_WAIT
+
+        def done():
+            if self.dialog is not d:
+                return
+            if what == 'arith':
+                self._arith(d)
+            else:
+                self._convert(d)
+            d.pc += 1
+            self._run(d)
+            self._after_apu()
+        self.on_done = done
+
+    def _after_apu(self):
+        """The APU has finished an instruction (FPU 5.1.1.2, 6.1)."""
+        if self.busy:
+            return
+        cu = self.cu
+        if cu is not None:
+            if self.exc_pend and not cu.released:
+                # FPU 6.1: "the second FMUL instruction is in the middle of
+                # the instruction, hence a take mid-instruction exception".
+                vec = A.trap_vector((self.st.fpsr >> 8) & 0xFF, self.st.enable) or 49
+                self.resp = 0x1D00 | vec
+                return
+            self._run(cu)
+        if self.latched is not None:
+            k, w = self.latched
+            self.latched = None
+            self._dispatch(k, w)
+            return
+        if self._bd() is None and not self.pv and self.dialog is None:
+            self.resp = self._quiet_resp()
+
+    def _kick(self):
+        """After FRESTORE: a released CU instruction goes to the APU."""
+        if self.cu is not None and self.cu.released:
+            self._run(self.cu)
+
+    # --------------------------------------------------- the response CIR
+    def _read_response(self):
+        r = self.resp
+        if self.pv:
+            return r
+        d = self._bd()
+        if d is None:
+            return r
+        step = d.steps[d.pc]
+        if step[0] == 'prim' and r == step[1]:
+            if r >> 14 & 1:
+                self.pc_expect = d                  # FPU 7.2.10: mandatory
+            nxt = step[2]
+            if nxt is None:
+                return r                            # a take-exception primitive persists
+            d.pc += 1
+            if nxt == 'release':
+                d.released = True
+            else:
+                self.resp = nxt
+            self._run(d)
+        return r
+
+    def _operand_write(self, v):
+        if self.frame is not None and self.frame['dir'] == 'restore':
+            super()._operand_write(v)
+            return
+        if self._expect() != 'opw':
+            self._violation()
+            return
+        d = self._bd()
+        d.data.append(v & 0xFFFFFFFF)
+        self.opreg = v & 0xFFFFFFFF
+        d.count -= 1
+        if d.count == 0:
+            if d.steps[d.pc][1] == 1 and d.pc + 1 < len(d.steps) and \
+                    d.steps[d.pc + 1][0] in ('mask_dyn', 'compute'):
+                d.dreg = d.data[0]
+            d.pc += 1
+            self._run(d)
+
+    # ------------------------------------------------------------ FSAVE
+    @staticmethod
+    def _is_take(d):
+        return d is not None and len(d.steps) == 1 and d.steps[0][2] is None
+
+    def _save(self):
+        """FPU 6.4.3, table 6-5. A take-exception primitive is not an
+        instruction: the MPU starts the instruction again after the handler."""
+        if self.frame is not None:
+            return FW_INVALID
+        if self.null_state:
+            return FW_NULL
+        if self.busy:
+            return FW_AGAIN
+        d = None if self._is_take(self.dialog) else self.dialog
+        cu_mid = self.cu is not None and not self.cu.released
+        fresh = d is not None and d.pc == d.first_prim()
+        if not self.pv and (cu_mid or (d is not None and not fresh)):
+            longs, fw = self._busy_frame82(d), FW82_BUSY
+        else:
+            longs, fw = self._idle_frame82(d if fresh and not self.pv else None), FW82_IDLE
+        self.frame = {'dir': 'save', 'data': longs, 'n': len(longs), 'i': 0}
+        return fw
+
+    def _cu_words(self):
+        """Eight long words of CU state (FPU figure 6-5), our own layout:
+
+            +0  command word (31-16); bit 15: 0 if the CU holds an
+                instruction; bit 14: the MPU has been released; bit 13:
+                its PC was passed; bits 12-8 ones; bits 7-0: operand long
+                words still to come
+            +4  the PC passed, or ones
+            +8  the operand long words received, ones after them
+            +20 ones
+
+        An empty CU is eight long words of ones."""
+        cu = self.cu
+        if cu is None:
+            return [0xFFFFFFFF] * CU_LONGS
+        st = cu.steps[cu.pc][0]
+        left = cu.count if st == 'opw' else 0
+        w0 = (cu.word << 16) | (int(cu.released) << 14) | \
+            (int(cu.iaddr is not None) << 13) | 0x1F00 | left
+        data = list(cu.data) + [0xFFFFFFFF] * (3 - len(cu.data))
+        return [w0, 0xFFFFFFFF if cu.iaddr is None else cu.iaddr] + data + [0xFFFFFFFF] * 3
+
+    def _cu_from(self, w):
+        if w[0] >> 15 & 1:
+            self.cu = None
+            return
+        word = w[0] >> 16
+        cu = Dialog('gen', word, self._cu_steps(word))
+        cu.released = bool(w[0] >> 14 & 1)
+        cu.iaddr = w[1] if w[0] >> 13 & 1 else None
+        left = w[0] & 0xFF
+        nl = [s[1] for s in cu.steps if s[0] == 'opw']
+        nl = nl[0] if nl else 0
+        cu.data = list(w[2:2 + nl - left]) if nl else []
+        kinds = [s[0] for s in cu.steps]
+        if left:
+            cu.pc, cu.count = kinds.index('opw'), left
+        elif cu.released:
+            cu.pc = kinds.index('handoff')
+        else:
+            cu.pc = kinds.index('handoff') if 'opw' in kinds else 0
+        self.cu = cu
+
+    def _idle_frame82(self, d):
+        """FPU figure 6-5: the MC68881's idle frame with the CU's words
+        after the command word."""
+        f = self._idle_frame(d)
+        return f[:1] + self._cu_words() + f[1:]
+
+    def _busy_frame82(self, d):
+        """Opaque (FPU 6.4.2.3). The CU's words first (FPU 6.4.2: "at the
+        top of the frame"), the BIU flags last, where FPU figure 5-6's
+        handler sets EXC PEND (BSET #3,(SP,D0), D0 the frame's size)."""
+        e = self.etemp.bits96()
+        if d is not None:
+            head = [(d.word << 16) | (1 if d.kind == 'cond' else 0) << 8 | d.pc,
+                    (d.count << 16) | d.mask, d.dreg, d.trap,
+                    len(d.data) | (1 << 8 if d.released else 0) | (1 << 9),
+                    0xFFFFFFFF if d.iaddr is None else d.iaddr]
+            data = list(d.data)
+        else:
+            head, data = [0, 0, 0, 0, 0, 0], []
+        longs = self._cu_words() + [0x52443838, self.resp] + head + \
+            [(e >> 64) & 0xFFFFFFFF, (e >> 32) & 0xFFFFFFFF, e & 0xFFFFFFFF] + data
+        longs += [0xFFFFFFFF] * (BUSY82_LONGS - 1 - len(longs))
+        longs.append(self._biu_flags(d))
+        assert len(longs) == BUSY82_LONGS
+        return longs
+
+    def _save_done(self):
+        super()._save_done()
+        self.cu = None
+        self.pc_expect = None
+
+    # --------------------------------------------------------- FRESTORE
+    def _restore(self, fw):
+        """FPU 6.4.4: an MC68881 frame is not one of the MC68882's
+        (FPU p. 5-14)."""
+        self._abort()
+        if fw >> 8 == 0:
+            self.reset()
+            self.restore_readback = fw
+            return
+        n = {FW82_IDLE: IDLE82_LONGS, FW82_BUSY: BUSY82_LONGS}.get(fw)
+        if n is None:
+            self.restore_readback = FW_INVALID
+            return
+        self.restore_readback = fw
+        self.frame = {'dir': 'restore', 'data': [], 'n': n, 'fw': fw}
+
+    def _restore_done(self):
+        f = self.frame
+        self.frame = None
+        self.null_state = False
+        w = f['data']
+        flags = w[-1]
+        self.exc_pend = not (flags >> 27) & 1
+        if f['fw'] == FW82_IDLE:
+            self._cu_from(w[1:9])
+            self.etemp = F.reg_from_bits96((w[9] << 64) | (w[10] << 32) | w[11])
+            self.opreg = w[12]
+            self.pv = bool(flags >> 31 & 1)
+            code = (flags >> 28) & 7
+            self.resp = P_PROTOCOL if self.pv else self._quiet_resp()
+            if self.pv:
+                return
+            self._kick()
+            if code in (PEND_GEN, PEND_COND):
+                self._dispatch('cond' if code == PEND_COND else 'gen', w[0] >> 16)
+            elif self.cu is None and not self.busy:
+                self.resp = P_IDLE
+            return
+        self._cu_from(w[0:8])
+        resp, head = w[9], w[10:16]
+        self.etemp = F.reg_from_bits96((w[16] << 64) | (w[17] << 32) | w[18])
+        self.dialog = None
+        if head[4] >> 9 & 1:
+            word = head[0] >> 16
+            kind = 'cond' if (head[0] >> 8) & 1 else 'gen'
+            cu, exc = self.cu, self.exc_pend
+            self.cu, self.exc_pend = None, False
+            self._begin(kind, word)             # rebuild the step list
+            self.cu, self.exc_pend = cu, exc
+            d = self.dialog
+            d.pc = head[0] & 0xFF
+            d.count, d.mask = head[1] >> 16, head[1] & 0xFFFF
+            d.dreg, d.trap = head[2], head[3] & 0xFF
+            d.released = bool(head[4] >> 8 & 1)
+            d.iaddr = None if head[5] == 0xFFFFFFFF else head[5]
+            d.data = w[19:19 + (head[4] & 0xFF)]
+            self.resp = resp
+            return
+        cu = self.cu
+        if cu is not None and not cu.released:
+            if self.exc_pend:
+                vec = A.trap_vector((self.st.fpsr >> 8) & 0xFF, self.st.enable) or 49
+                self.resp = 0x1D00 | vec
+            elif cu.steps[cu.pc][0] == 'opw':
+                self.resp = P_RELEASE if cu.steps[0][2] == P_RELEASE else P_WAIT
+            else:
+                self.resp = P_WAIT
+                self._run(cu)                   # the handoff: the APU is free
 
 
 # -----------------------------------------------------------------------------
