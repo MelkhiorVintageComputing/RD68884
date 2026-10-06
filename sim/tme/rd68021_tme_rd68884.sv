@@ -15,11 +15,13 @@
 // from the board and from the core's RESET instruction.
 //
 // BUS_SYNC = 1 is the same-clock BIU (doc/bus-timing.md): the FPU then runs on
-// the core's clock, and clk_fpu is not used.
+// the core's clock, and clk_fpu is not used. MODEL = 68882 is RD68885
+// (doc/rd68885.md).
 
 module rd68021_tme_rd68884 #(
     parameter int BUS_SYNC      = 0,
-    parameter int BUS_SYNC_WAIT = 0
+    parameter int BUS_SYNC_WAIT = 0,
+    parameter int MODEL         = 68881
 ) (
     input  logic        clk,
     input  logic        clk_fpu,
@@ -98,7 +100,7 @@ module rd68021_tme_rd68884 #(
   logic fpu_clk;
   assign fpu_clk = (BUS_SYNC != 0) ? clk : clk_fpu;
 
-  rd68884_top #(.BUS_SYNC (BUS_SYNC), .BUS_SYNC_WAIT (BUS_SYNC_WAIT)) fpu (
+  rd68884_top #(.BUS_SYNC (BUS_SYNC), .BUS_SYNC_WAIT (BUS_SYNC_WAIT), .MODEL (MODEL)) fpu (
       .clk (fpu_clk), .rst_n (rst_n),
       .reset_n_i (reset_n_i && !(reset_n_oe && !reset_n_o)),
       .cs_n_i (cs_n), .as_n_i (as_n_o), .ds_n_i (ds_n_o), .rw_i (rw_o),

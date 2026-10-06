@@ -206,6 +206,47 @@ class VsModel(unittest.TestCase):
         b = scen(Machine(model=68882))
         self.assertEqual(a, b)
 
+    def test_fmove_in_the_cu(self):
+        """FPU table 5-5: FMOVEs the CU completes while FSQRT computes, among
+        them a conflict (f) that must wait, then the condition codes in
+        program order. Same end as the model; and the CU did complete them."""
+        from iss import biu as B
+        done = []
+        orig = B.Biu._fm_apply
+
+        def spy(biu, d):
+            if d.get('done') or d.get('xout'):
+                done.append(biu.cu_fm)
+            return orig(biu, d)
+
+        def scen(fpu):
+            m = MPU(fpu)
+            m.a[5] = 0x5000
+            for r in range(8):
+                m.fgen(cmd(2, F.FMT_L, r, OP['FMOVE']), ('imm', r + 2, 4))
+            fpu.tick(300)
+            out = []
+            for src in (0, 3):
+                m.fgen(cmd(0, src, 1, OP['FSQRT']))                       # the APU: FP1
+                m.fgen(cmd(2, F.FMT_D, 2, OP['FMOVE']), ('imm', F.encode_d(fin(1, 5, -1)), 8))
+                m.fgen(cmd(0, 4, 5, OP['FMOVE']))                         # FP4 to FP5
+                m.fgen(cmd(3, F.FMT_X, 6, 0), ('predec', 5))              # FP6 out
+                m.fgen(cmd(2, F.FMT_S, 1, OP['FMOVE']), ('imm', F.encode_s(fin(0, 7, 0)), 4))  # (f)
+                out.append(m.fcond(0x02))                                 # FBOGT: FP1's CC... FMOVE's
+                out.append(fpu.fpsr if not hasattr(fpu, 'st') else fpu.st.fpsr)
+            fpu.tick(400)
+            regs = [fpu.st.fp[i].bits80() for i in range(8)] if hasattr(fpu, 'st') \
+                else [fpu.fp_bits80(i) for i in range(8)]
+            return out, regs, m.mem.read(0x5000 - 24, 12), m.mem.read(0x5000 - 12, 12)
+        a = scen(FPU882(latency=lambda c: SLOW))
+        B.Biu._fm_apply = spy
+        try:
+            b = scen(Machine(model=68882))
+        finally:
+            B.Biu._fm_apply = orig
+        self.assertEqual(a, b)
+        self.assertEqual(sorted(set(done)), [B.FM_IN, B.FM_RR, B.FM_XOUT])
+
     def test_random_programs(self):
         rnd = random.Random(68885)
         for t in range(150):

@@ -136,6 +136,12 @@ class FP:
         return self.nan and not (self.mant >> 70) & 1
 
 
+def rf_word(a):
+    """A working value as the register file stores it: {sign, exponent[17:0],
+    mantissa[71:0]} (rtl/rd68884_regfile.sv)."""
+    return (a.sign << 90) | ((a.exp & 0x3FFFF) << 72) | a.mant
+
+
 def unpack_x(xi):
     w0, w1, w2 = xi
     return FP(w0 >> 31 & 1, ((w0 >> 16) & 0x7FFF) - 16383, (((w1 << 32) | w2) << 8) & M72)
@@ -250,6 +256,15 @@ class Core:
         self.ev_resp = self.ev_rsel = self.ev_save = 0
         self.restore_req_q = 0
         self.run = 0                # RD68885: a released instruction computes
+        self.rfbq = FP()            # RD68885: the register file's second port, read
+
+    def _rfb(self, b, n_rfbq):
+        """The second port's write and read register, at the clock's end."""
+        if b.get('rfb_we'):
+            w = b['rfb_wd']
+            e = (w >> 72) & 0x3FFFF
+            self.rf[b['rfb_wa']] = FP(w >> 90 & 1, e - (1 << 18) if e >> 17 else e, w & M72)
+        self.rfbq = n_rfbq
 
     def entry(self, name):
         return self.labels[name]
@@ -274,7 +289,12 @@ class Core:
                    restore=0, restore_xfer=0, fpiar_we=0, fpiar=0, clear=0,
                    resp_xfer=0, cu_take=0, cu_load=0, cu_idx=0, cu_data=0, cu_resume=0,
                    relatch=0, relatch_word=0, relatch_cond=0,
-                   apu_run=self.run, pcen=int((self.fpcr >> 8) & 0x7F != 0))
+                   apu_run=self.run, pcen=int((self.fpcr >> 8) & 0x7F != 0),
+                   prec_x=int((self.fpcr >> 6) & 3 in (0, 3)), dcc_ack=0,
+                   rfb_q=rf_word(self.rfbq))
+        # RD68885: the conversion unit's port into the register file reads
+        # what the clock starts with (a block RAM's read-first port).
+        n_rfbq = self.rf[b['rfb_ra']].copy() if b.get('rfb_re') else self.rfbq
 
         # ---- traps: the RESET pin, an abort, a restore CIR write ----------
         restore_rise = b['restore_req'] and not self.restore_req_q
@@ -295,6 +315,7 @@ class Core:
         if trap:
             self.ev_resp, self.ev_rsel, self.ev_save = ev_resp, ev_rsel, ev_save
             self.run = 0
+            self._rfb(b, n_rfbq)
             self.upc = self.entry(trap)
             return out
 
@@ -792,6 +813,14 @@ class Core:
             n_run = 1
         elif fl == 'CLR_RUN':
             n_run = 0
+        # RD68885: an FMOVE the CU completed while the APU computed has its
+        # FPSR effects deferred; they land once the APU's instruction is over
+        # (no released instruction computing), in program order.
+        if b.get('dcc_v') and not self.run:
+            n_fpsr &= ~0xFF00
+            if b.get('dcc_cc_v'):
+                n_fpsr = (n_fpsr & ~0x0F000000) | (b['dcc_cc'] << 24)
+            out['dcc_ack'] = 1
 
         # ---- the next micro-address ----------------------------------------
         seq = F('SEQ')
@@ -831,6 +860,7 @@ class Core:
         self.cmd, self.is_cond = n_cmd, n_is_cond
         self.exc_pend, self.null_state, self.pcode = n_exc, n_null, n_pcode
         self.run = n_run
+        self._rfb(b, n_rfbq)
         if td == 'SEQST':
             ev_resp, ev_rsel = (tbus >> 6) & 1, (tbus >> 5) & 1
         self.ev_resp, self.ev_rsel, self.ev_save = ev_resp, ev_rsel, ev_save

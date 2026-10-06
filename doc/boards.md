@@ -75,6 +75,18 @@ make board-iisia7 BOARD_DIVIDE=25     # 40 MHz, if 50 ever stops meeting timing
 | Utilisation | 4447 LUTs (14% of the 50T), 949 flip-flops, 6 DSPs, 21 block RAMs, 79 I/O |
 | DRC | No errors; BRAM and DSP advisories only |
 
+**RD68885, the MC68882 build** (doc/rd68885.md):
+
+```sh
+make board-iisia7 MODEL=68882 BOARD_DIVIDE=14    # 71.43 MHz; writes rd68885_iisia7.*
+```
+
+| | |
+|---|---|
+| Core clock | **71.43 MHz, met.** Worst setup slack +0.071 ns, on the same path as RD68884's (the microword to `A`'s exponent), not the conversion unit's. RD68884 has +0.387 ns at the same clock |
+| Utilisation | 1419 slices (17.4% of the 50T; RD68884 1181, 14.5%), 5101 slice LUTs, 1314 flip-flops, 6 DSPs, 22 block RAMs, 79 I/O |
+| Build directory | `build/iisia7_mini-68882/` |
+
 ### Checked in simulation
 
 `make sys BOARD=iisia7` runs the board top itself in `sys_tb`, on RD68021:

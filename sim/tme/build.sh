@@ -40,7 +40,8 @@ fi
 # The core, as a static library behind a C interface.
 V=$B/vobj
 # BUS_SYNC=1 in the environment: the same-clock BIU, on the core's clock.
-GEN="-GBUS_SYNC=${BUS_SYNC:-0} -GBUS_SYNC_WAIT=${BUS_SYNC_WAIT:-0}"
+# MODEL=68882: RD68885 (doc/rd68885.md).
+GEN="-GBUS_SYNC=${BUS_SYNC:-0} -GBUS_SYNC_WAIT=${BUS_SYNC_WAIT:-0} -GMODEL=${MODEL:-68881}"
 verilator --cc -O3 --top-module rd68021_tme_rd68884 --prefix Vrd68021_top $GEN \
   -Wno-fatal --Mdir $V -CFLAGS "-O2" $RD/rtl/rd68021.vlt $RD/sim/tme/public.vlt \
   "$@" $ROOT/sim/tme/rd68021_tme_rd68884.sv > $B/verilator.log 2>&1

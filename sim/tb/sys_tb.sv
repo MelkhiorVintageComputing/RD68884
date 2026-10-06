@@ -323,18 +323,20 @@ module sys_tb;
       `FPU.restore_word, `FPU.fpiar, `FPU.pv, `FPU.resp_read, `FPU.rsel_read,
       `FPU.save_read, `FPU.abort);
     // RD68885's conversion unit (constant in the MC68881 build).
-    $fwrite(ls, "%h %h %h %h %h %h %h %h %h %h | ",
+    $fwrite(ls, "%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h | ",
       `FPU.abort_ab, `FPU.cu_ready, `FPU.cu_valid, `FPU.cu_mid, `FPU.cu_word,
-      `FPU.cu_d0, `FPU.cu_d1, `FPU.cu_d2, `FPU.cu_w0, `FPU.cu_w1);
+      `FPU.cu_d0, `FPU.cu_d1, `FPU.cu_d2, `FPU.cu_w0, `FPU.cu_w1,
+      `FPU.rfb_we, `FPU.rfb_wa, `FPU.rfb_wd, `FPU.rfb_re, `FPU.rfb_ra,
+      `FPU.dcc_v, `FPU.dcc_cc_v, `FPU.dcc_cc);
     $fwrite(ls, "%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h ",
       `FPU.resp_we, `FPU.resp, `FPU.resp_oneshot, `FPU.expect_v, `FPU.resp_cond,
       `FPU.cmd_ack, `FPU.opw_ack, `FPU.opr_we, `FPU.opr, `FPU.rsel_we, `FPU.rsel,
       `FPU.rsel_dir, `FPU.save_we, `FPU.save_v, `FPU.save_xfer, `FPU.restore_we,
       `FPU.restore_v, `FPU.restore_xfer, `FPU.fpiar_we, `FPU.fpiar_v, `FPU.clear);
-    $fwrite(ls, "%h %h %h %h %h %h %h %h %h %h %h | %h\n",
+    $fwrite(ls, "%h %h %h %h %h %h %h %h %h %h %h %h %h | %h\n",
       `FPU.apu_run, `FPU.pcen, `FPU.resp_xfer, `FPU.cu_take, `FPU.cu_load, `FPU.cu_idx,
       `FPU.cu_data, `FPU.cu_resume, `FPU.relatch, `FPU.relatch_word, `FPU.relatch_cond,
-      `FPU.u_seq.upc);
+      `FPU.prec_x, `FPU.dcc_ack, `FPU.u_seq.upc);
   end
 
   // ---- the run ----------------------------------------------------------------------

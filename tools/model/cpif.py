@@ -666,6 +666,15 @@ def prim_eval_ea0(to_fpu, pc, valid_ea, length):
     return (pc << 14) | ((0 if to_fpu else 1) << 13) | 0x1000 | (valid_ea << 8) | length
 
 
+def x_out_ca0(r):
+    """FMOVE.X FPm,<ea> on the MC68882: CA = 0 (figure 7-21) for a normal
+    (integer bit set), zero or infinite source; a NaN, unnormal or denormal
+    one takes figure 7-20's dialog (FPU 7.5.1.3)."""
+    if r.e == 0x7FFF:
+        return r.m & ((1 << 63) - 1) == 0
+    return r.m == 0 or bool(r.m >> 63 & 1)
+
+
 def is_fp_take(resp):
     """A take pre- or mid-instruction exception primitive for a floating-point
     exception, vectors 48-54: the ones an MC68882 keeps reporting past the
@@ -856,6 +865,12 @@ class FPU882(FPU881):
             self._run()
             return
         super()._begin_gen(cmd)
+        if opclass == 3 and rx == F.FMT_X and x_out_ca0(self.st.fp[(cmd >> 7) & 7]):
+            # FPU 7.5.1.3, figure 7-21: an extended store takes its operand
+            # with CA = 0, but for a NaN, unnormal or denormal source.
+            d = self.dialog
+            d.steps = [('prim', 0x320C, P_WAIT) if st[0] == 'prim' and st[1] == 0xB20C else st
+                       for st in d.steps]
 
     # ---------------------------------------------------- the step machine
     def _run(self, d=None):

@@ -1,0 +1,732 @@
+# tools/cycles.py --freeze, MODEL=68882: each row's total, its release
+# (no FNOP after it) and its head (its overlap after a FETOX), CPU clocks.
+FABS.X FP0,FP1	23
+FABS.X FP0,FP1 [release]	21
+FABS.X FP0,FP1 [head]	13
+FABS.L (A0),FP1	40
+FABS.L (A0),FP1 [release]	38
+FABS.L (A0),FP1 [head]	23
+FABS.S (A0),FP1	31
+FABS.S (A0),FP1 [release]	27
+FABS.S (A0),FP1 [head]	14
+FABS.D (A0),FP1	46
+FABS.D (A0),FP1 [release]	44
+FABS.D (A0),FP1 [head]	33
+FABS.X (A0),FP1	54
+FABS.X (A0),FP1 [release]	52
+FABS.X (A0),FP1 [head]	43
+FABS.P (A0),FP1	102
+FABS.P (A0),FP1 [release]	60
+FABS.P (A0),FP1 [head]	3
+FACOS.X FP0,FP1	223
+FACOS.X FP0,FP1 [release]	21
+FACOS.X FP0,FP1 [head]	3
+FACOS.S (A0),FP1	240
+FACOS.S (A0),FP1 [release]	27
+FACOS.S (A0),FP1 [head]	23
+FACOS.D (A0),FP1	247
+FACOS.D (A0),FP1 [release]	44
+FACOS.D (A0),FP1 [head]	34
+FACOS.X (A0),FP1	255
+FACOS.X (A0),FP1 [release]	52
+FACOS.X (A0),FP1 [head]	34
+FACOS.P (A0),FP1	302
+FACOS.P (A0),FP1 [release]	60
+FACOS.P (A0),FP1 [head]	3
+FADD.X FP0,FP1	23
+FADD.X FP0,FP1 [release]	21
+FADD.X FP0,FP1 [head]	3
+FADD.L (A0),FP1	40
+FADD.L (A0),FP1 [release]	38
+FADD.L (A0),FP1 [head]	23
+FADD.S (A0),FP1	40
+FADD.S (A0),FP1 [release]	27
+FADD.S (A0),FP1 [head]	23
+FADD.D (A0),FP1	56
+FADD.D (A0),FP1 [release]	44
+FADD.D (A0),FP1 [head]	33
+FADD.X (A0),FP1	64
+FADD.X (A0),FP1 [release]	52
+FADD.X (A0),FP1 [head]	43
+FADD.P (A0),FP1	103
+FADD.P (A0),FP1 [release]	60
+FADD.P (A0),FP1 [head]	3
+FASIN.X FP0,FP1	263
+FASIN.X FP0,FP1 [release]	21
+FASIN.X FP0,FP1 [head]	3
+FASIN.S (A0),FP1	280
+FASIN.S (A0),FP1 [release]	27
+FASIN.S (A0),FP1 [head]	23
+FASIN.D (A0),FP1	287
+FASIN.D (A0),FP1 [release]	44
+FASIN.D (A0),FP1 [head]	34
+FASIN.X (A0),FP1	295
+FASIN.X (A0),FP1 [release]	52
+FASIN.X (A0),FP1 [head]	34
+FASIN.P (A0),FP1	342
+FASIN.P (A0),FP1 [release]	60
+FASIN.P (A0),FP1 [head]	3
+FATAN.X FP0,FP1	93
+FATAN.X FP0,FP1 [release]	21
+FATAN.X FP0,FP1 [head]	13
+FATAN.L (A0),FP1	210
+FATAN.L (A0),FP1 [release]	38
+FATAN.L (A0),FP1 [head]	23
+FATAN.S (A0),FP1	100
+FATAN.S (A0),FP1 [release]	27
+FATAN.S (A0),FP1 [head]	13
+FATAN.D (A0),FP1	116
+FATAN.D (A0),FP1 [release]	44
+FATAN.D (A0),FP1 [head]	33
+FATAN.X (A0),FP1	124
+FATAN.X (A0),FP1 [release]	52
+FATAN.X (A0),FP1 [head]	43
+FATAN.P (A0),FP1	172
+FATAN.P (A0),FP1 [release]	60
+FATAN.P (A0),FP1 [head]	3
+FATANH.X FP0,FP1	153
+FATANH.X FP0,FP1 [release]	21
+FATANH.X FP0,FP1 [head]	12
+FATANH.S (A0),FP1	170
+FATANH.S (A0),FP1 [release]	27
+FATANH.S (A0),FP1 [head]	23
+FATANH.D (A0),FP1	176
+FATANH.D (A0),FP1 [release]	44
+FATANH.D (A0),FP1 [head]	33
+FATANH.X (A0),FP1	184
+FATANH.X (A0),FP1 [release]	52
+FATANH.X (A0),FP1 [head]	43
+FATANH.P (A0),FP1	232
+FATANH.P (A0),FP1 [release]	60
+FATANH.P (A0),FP1 [head]	3
+FCMP.X FP0,FP1	23
+FCMP.X FP0,FP1 [release]	21
+FCMP.X FP0,FP1 [head]	13
+FCMP.L (A0),FP1	40
+FCMP.L (A0),FP1 [release]	38
+FCMP.L (A0),FP1 [head]	23
+FCMP.S (A0),FP1	40
+FCMP.S (A0),FP1 [release]	27
+FCMP.S (A0),FP1 [head]	23
+FCMP.D (A0),FP1	46
+FCMP.D (A0),FP1 [release]	44
+FCMP.D (A0),FP1 [head]	33
+FCMP.X (A0),FP1	54
+FCMP.X (A0),FP1 [release]	52
+FCMP.X (A0),FP1 [head]	43
+FCMP.P (A0),FP1	102
+FCMP.P (A0),FP1 [release]	60
+FCMP.P (A0),FP1 [head]	3
+FCOS.X FP0,FP1	153
+FCOS.X FP0,FP1 [release]	21
+FCOS.X FP0,FP1 [head]	3
+FCOS.L (A0),FP1	190
+FCOS.L (A0),FP1 [release]	38
+FCOS.L (A0),FP1 [head]	23
+FCOS.S (A0),FP1	170
+FCOS.S (A0),FP1 [release]	27
+FCOS.S (A0),FP1 [head]	23
+FCOS.D (A0),FP1	176
+FCOS.D (A0),FP1 [release]	44
+FCOS.D (A0),FP1 [head]	33
+FCOS.X (A0),FP1	184
+FCOS.X (A0),FP1 [release]	52
+FCOS.X (A0),FP1 [head]	33
+FCOS.P (A0),FP1	232
+FCOS.P (A0),FP1 [release]	60
+FCOS.P (A0),FP1 [head]	3
+FCOSH.X FP0,FP1	163
+FCOSH.X FP0,FP1 [release]	21
+FCOSH.X FP0,FP1 [head]	3
+FCOSH.L (A0),FP1	180
+FCOSH.L (A0),FP1 [release]	38
+FCOSH.L (A0),FP1 [head]	22
+FCOSH.S (A0),FP1	180
+FCOSH.S (A0),FP1 [release]	27
+FCOSH.S (A0),FP1 [head]	23
+FCOSH.D (A0),FP1	187
+FCOSH.D (A0),FP1 [release]	44
+FCOSH.D (A0),FP1 [head]	34
+FCOSH.X (A0),FP1	195
+FCOSH.X (A0),FP1 [release]	52
+FCOSH.X (A0),FP1 [head]	34
+FCOSH.P (A0),FP1	242
+FCOSH.P (A0),FP1 [release]	60
+FCOSH.P (A0),FP1 [head]	3
+FDIV.X FP0,FP1	53
+FDIV.X FP0,FP1 [release]	21
+FDIV.X FP0,FP1 [head]	13
+FDIV.L (A0),FP1	61
+FDIV.L (A0),FP1 [release]	38
+FDIV.L (A0),FP1 [head]	14
+FDIV.S (A0),FP1	61
+FDIV.S (A0),FP1 [release]	27
+FDIV.S (A0),FP1 [head]	14
+FDIV.D (A0),FP1	76
+FDIV.D (A0),FP1 [release]	44
+FDIV.D (A0),FP1 [head]	33
+FDIV.X (A0),FP1	84
+FDIV.X (A0),FP1 [release]	52
+FDIV.X (A0),FP1 [head]	43
+FDIV.P (A0),FP1	132
+FDIV.P (A0),FP1 [release]	60
+FDIV.P (A0),FP1 [head]	3
+FETOX.X FP0,FP1	133
+FETOX.X FP0,FP1 [release]	21
+FETOX.X FP0,FP1 [head]	13
+FETOX.L (A0),FP1	150
+FETOX.L (A0),FP1 [release]	38
+FETOX.L (A0),FP1 [head]	23
+FETOX.S (A0),FP1	141
+FETOX.S (A0),FP1 [release]	27
+FETOX.S (A0),FP1 [head]	14
+FETOX.D (A0),FP1	156
+FETOX.D (A0),FP1 [release]	44
+FETOX.D (A0),FP1 [head]	33
+FETOX.X (A0),FP1	164
+FETOX.X (A0),FP1 [release]	52
+FETOX.X (A0),FP1 [head]	43
+FETOX.P (A0),FP1	212
+FETOX.P (A0),FP1 [release]	60
+FETOX.P (A0),FP1 [head]	3
+FETOXM1.X FP0,FP1	133
+FETOXM1.X FP0,FP1 [release]	21
+FETOXM1.X FP0,FP1 [head]	3
+FETOXM1.L (A0),FP1	160
+FETOXM1.L (A0),FP1 [release]	38
+FETOXM1.L (A0),FP1 [head]	23
+FETOXM1.S (A0),FP1	150
+FETOXM1.S (A0),FP1 [release]	27
+FETOXM1.S (A0),FP1 [head]	23
+FETOXM1.D (A0),FP1	166
+FETOXM1.D (A0),FP1 [release]	44
+FETOXM1.D (A0),FP1 [head]	33
+FETOXM1.X (A0),FP1	174
+FETOXM1.X (A0),FP1 [release]	52
+FETOXM1.X (A0),FP1 [head]	43
+FETOXM1.P (A0),FP1	222
+FETOXM1.P (A0),FP1 [release]	60
+FETOXM1.P (A0),FP1 [head]	12
+FGETEXP.X FP0,FP1	23
+FGETEXP.X FP0,FP1 [release]	21
+FGETEXP.X FP0,FP1 [head]	13
+FGETEXP.L (A0),FP1	40
+FGETEXP.L (A0),FP1 [release]	38
+FGETEXP.L (A0),FP1 [head]	23
+FGETEXP.S (A0),FP1	31
+FGETEXP.S (A0),FP1 [release]	27
+FGETEXP.S (A0),FP1 [head]	14
+FGETEXP.D (A0),FP1	46
+FGETEXP.D (A0),FP1 [release]	44
+FGETEXP.D (A0),FP1 [head]	33
+FGETEXP.X (A0),FP1	54
+FGETEXP.X (A0),FP1 [release]	52
+FGETEXP.X (A0),FP1 [head]	43
+FGETEXP.P (A0),FP1	102
+FGETEXP.P (A0),FP1 [release]	60
+FGETEXP.P (A0),FP1 [head]	3
+FGETMAN.X FP0,FP1	23
+FGETMAN.X FP0,FP1 [release]	21
+FGETMAN.X FP0,FP1 [head]	13
+FGETMAN.L (A0),FP1	40
+FGETMAN.L (A0),FP1 [release]	38
+FGETMAN.L (A0),FP1 [head]	23
+FGETMAN.S (A0),FP1	30
+FGETMAN.S (A0),FP1 [release]	27
+FGETMAN.S (A0),FP1 [head]	13
+FGETMAN.D (A0),FP1	46
+FGETMAN.D (A0),FP1 [release]	44
+FGETMAN.D (A0),FP1 [head]	33
+FGETMAN.X (A0),FP1	54
+FGETMAN.X (A0),FP1 [release]	52
+FGETMAN.X (A0),FP1 [head]	43
+FGETMAN.P (A0),FP1	102
+FGETMAN.P (A0),FP1 [release]	60
+FGETMAN.P (A0),FP1 [head]	3
+FINT.X FP0,FP1	23
+FINT.X FP0,FP1 [release]	21
+FINT.X FP0,FP1 [head]	3
+FINT.L (A0),FP1	40
+FINT.L (A0),FP1 [release]	38
+FINT.L (A0),FP1 [head]	23
+FINT.S (A0),FP1	40
+FINT.S (A0),FP1 [release]	27
+FINT.S (A0),FP1 [head]	23
+FINT.D (A0),FP1	46
+FINT.D (A0),FP1 [release]	44
+FINT.D (A0),FP1 [head]	33
+FINT.X (A0),FP1	54
+FINT.X (A0),FP1 [release]	52
+FINT.X (A0),FP1 [head]	42
+FINT.P (A0),FP1	102
+FINT.P (A0),FP1 [release]	60
+FINT.P (A0),FP1 [head]	3
+FINTRZ.X FP0,FP1	23
+FINTRZ.X FP0,FP1 [release]	21
+FINTRZ.X FP0,FP1 [head]	3
+FINTRZ.L (A0),FP1	40
+FINTRZ.L (A0),FP1 [release]	38
+FINTRZ.L (A0),FP1 [head]	23
+FINTRZ.S (A0),FP1	40
+FINTRZ.S (A0),FP1 [release]	27
+FINTRZ.S (A0),FP1 [head]	23
+FINTRZ.D (A0),FP1	46
+FINTRZ.D (A0),FP1 [release]	44
+FINTRZ.D (A0),FP1 [head]	33
+FINTRZ.X (A0),FP1	54
+FINTRZ.X (A0),FP1 [release]	52
+FINTRZ.X (A0),FP1 [head]	42
+FINTRZ.P (A0),FP1	102
+FINTRZ.P (A0),FP1 [release]	60
+FINTRZ.P (A0),FP1 [head]	3
+FLOGN.X FP0,FP1	113
+FLOGN.X FP0,FP1 [release]	21
+FLOGN.X FP0,FP1 [head]	12
+FLOGN.L (A0),FP1	130
+FLOGN.L (A0),FP1 [release]	38
+FLOGN.L (A0),FP1 [head]	23
+FLOGN.S (A0),FP1	130
+FLOGN.S (A0),FP1 [release]	27
+FLOGN.S (A0),FP1 [head]	23
+FLOGN.D (A0),FP1	136
+FLOGN.D (A0),FP1 [release]	44
+FLOGN.D (A0),FP1 [head]	33
+FLOGN.X (A0),FP1	144
+FLOGN.X (A0),FP1 [release]	52
+FLOGN.X (A0),FP1 [head]	42
+FLOGN.P (A0),FP1	192
+FLOGN.P (A0),FP1 [release]	60
+FLOGN.P (A0),FP1 [head]	3
+FLOGNP1.X FP0,FP1	103
+FLOGNP1.X FP0,FP1 [release]	21
+FLOGNP1.X FP0,FP1 [head]	3
+FLOGNP1.L (A0),FP1	120
+FLOGNP1.L (A0),FP1 [release]	38
+FLOGNP1.L (A0),FP1 [head]	22
+FLOGNP1.S (A0),FP1	120
+FLOGNP1.S (A0),FP1 [release]	27
+FLOGNP1.S (A0),FP1 [head]	23
+FLOGNP1.D (A0),FP1	136
+FLOGNP1.D (A0),FP1 [release]	44
+FLOGNP1.D (A0),FP1 [head]	33
+FLOGNP1.X (A0),FP1	144
+FLOGNP1.X (A0),FP1 [release]	52
+FLOGNP1.X (A0),FP1 [head]	43
+FLOGNP1.P (A0),FP1	192
+FLOGNP1.P (A0),FP1 [release]	60
+FLOGNP1.P (A0),FP1 [head]	3
+FLOG10.X FP0,FP1	114
+FLOG10.X FP0,FP1 [release]	21
+FLOG10.X FP0,FP1 [head]	4
+FLOG10.L (A0),FP1	140
+FLOG10.L (A0),FP1 [release]	38
+FLOG10.L (A0),FP1 [head]	23
+FLOG10.S (A0),FP1	130
+FLOG10.S (A0),FP1 [release]	27
+FLOG10.S (A0),FP1 [head]	23
+FLOG10.D (A0),FP1	146
+FLOG10.D (A0),FP1 [release]	44
+FLOG10.D (A0),FP1 [head]	33
+FLOG10.X (A0),FP1	154
+FLOG10.X (A0),FP1 [release]	52
+FLOG10.X (A0),FP1 [head]	43
+FLOG10.P (A0),FP1	202
+FLOG10.P (A0),FP1 [release]	60
+FLOG10.P (A0),FP1 [head]	3
+FLOG2.X FP0,FP1	103
+FLOG2.X FP0,FP1 [release]	21
+FLOG2.X FP0,FP1 [head]	3
+FLOG2.L (A0),FP1	120
+FLOG2.L (A0),FP1 [release]	38
+FLOG2.L (A0),FP1 [head]	23
+FLOG2.S (A0),FP1	120
+FLOG2.S (A0),FP1 [release]	27
+FLOG2.S (A0),FP1 [head]	23
+FLOG2.D (A0),FP1	126
+FLOG2.D (A0),FP1 [release]	44
+FLOG2.D (A0),FP1 [head]	33
+FLOG2.X (A0),FP1	134
+FLOG2.X (A0),FP1 [release]	52
+FLOG2.X (A0),FP1 [head]	42
+FLOG2.P (A0),FP1	182
+FLOG2.P (A0),FP1 [release]	60
+FLOG2.P (A0),FP1 [head]	3
+FMOD.X FP0,FP1	33
+FMOD.X FP0,FP1 [release]	21
+FMOD.X FP0,FP1 [head]	12
+FMOD.L (A0),FP1	50
+FMOD.L (A0),FP1 [release]	38
+FMOD.L (A0),FP1 [head]	23
+FMOD.S (A0),FP1	50
+FMOD.S (A0),FP1 [release]	27
+FMOD.S (A0),FP1 [head]	23
+FMOD.D (A0),FP1	56
+FMOD.D (A0),FP1 [release]	44
+FMOD.D (A0),FP1 [head]	33
+FMOD.X (A0),FP1	64
+FMOD.X (A0),FP1 [release]	52
+FMOD.X (A0),FP1 [head]	43
+FMOD.P (A0),FP1	112
+FMOD.P (A0),FP1 [release]	60
+FMOD.P (A0),FP1 [head]	3
+FMOVE.X FP0,FP1	23
+FMOVE.X FP0,FP1 [release]	21
+FMOVE.X FP0,FP1 [head]	23
+FMOVE.L (A0),FP1	40
+FMOVE.L (A0),FP1 [release]	38
+FMOVE.L (A0),FP1 [head]	23
+FMOVE.S (A0),FP1	30
+FMOVE.S (A0),FP1 [release]	27
+FMOVE.S (A0),FP1 [head]	32
+FMOVE.D (A0),FP1	46
+FMOVE.D (A0),FP1 [release]	44
+FMOVE.D (A0),FP1 [head]	43
+FMOVE.X (A0),FP1	54
+FMOVE.X (A0),FP1 [release]	52
+FMOVE.X (A0),FP1 [head]	53
+FMOVE.P (A0),FP1	102
+FMOVE.P (A0),FP1 [release]	60
+FMOVE.P (A0),FP1 [head]	3
+FMUL.X FP0,FP1	23
+FMUL.X FP0,FP1 [release]	21
+FMUL.X FP0,FP1 [head]	3
+FMUL.L (A0),FP1	40
+FMUL.L (A0),FP1 [release]	38
+FMUL.L (A0),FP1 [head]	23
+FMUL.S (A0),FP1	40
+FMUL.S (A0),FP1 [release]	27
+FMUL.S (A0),FP1 [head]	23
+FMUL.D (A0),FP1	56
+FMUL.D (A0),FP1 [release]	44
+FMUL.D (A0),FP1 [head]	33
+FMUL.X (A0),FP1	64
+FMUL.X (A0),FP1 [release]	52
+FMUL.X (A0),FP1 [head]	43
+FMUL.P (A0),FP1	112
+FMUL.P (A0),FP1 [release]	60
+FMUL.P (A0),FP1 [head]	3
+FNEG.X FP0,FP1	23
+FNEG.X FP0,FP1 [release]	21
+FNEG.X FP0,FP1 [head]	13
+FNEG.L (A0),FP1	40
+FNEG.L (A0),FP1 [release]	38
+FNEG.L (A0),FP1 [head]	23
+FNEG.S (A0),FP1	31
+FNEG.S (A0),FP1 [release]	27
+FNEG.S (A0),FP1 [head]	14
+FNEG.D (A0),FP1	46
+FNEG.D (A0),FP1 [release]	44
+FNEG.D (A0),FP1 [head]	33
+FNEG.X (A0),FP1	54
+FNEG.X (A0),FP1 [release]	52
+FNEG.X (A0),FP1 [head]	43
+FNEG.P (A0),FP1	102
+FNEG.P (A0),FP1 [release]	60
+FNEG.P (A0),FP1 [head]	3
+FREM.X FP0,FP1	33
+FREM.X FP0,FP1 [release]	21
+FREM.X FP0,FP1 [head]	3
+FREM.L (A0),FP1	50
+FREM.L (A0),FP1 [release]	38
+FREM.L (A0),FP1 [head]	23
+FREM.S (A0),FP1	50
+FREM.S (A0),FP1 [release]	27
+FREM.S (A0),FP1 [head]	23
+FREM.D (A0),FP1	56
+FREM.D (A0),FP1 [release]	44
+FREM.D (A0),FP1 [head]	33
+FREM.X (A0),FP1	64
+FREM.X (A0),FP1 [release]	52
+FREM.X (A0),FP1 [head]	33
+FREM.P (A0),FP1	112
+FREM.P (A0),FP1 [release]	60
+FREM.P (A0),FP1 [head]	3
+FSCALE.X FP0,FP1	23
+FSCALE.X FP0,FP1 [release]	21
+FSCALE.X FP0,FP1 [head]	3
+FSCALE.L (A0),FP1	40
+FSCALE.L (A0),FP1 [release]	38
+FSCALE.L (A0),FP1 [head]	23
+FSCALE.S (A0),FP1	40
+FSCALE.S (A0),FP1 [release]	27
+FSCALE.S (A0),FP1 [head]	23
+FSCALE.D (A0),FP1	56
+FSCALE.D (A0),FP1 [release]	44
+FSCALE.D (A0),FP1 [head]	42
+FSCALE.X (A0),FP1	64
+FSCALE.X (A0),FP1 [release]	52
+FSCALE.X (A0),FP1 [head]	43
+FSCALE.P (A0),FP1	102
+FSCALE.P (A0),FP1 [release]	60
+FSCALE.P (A0),FP1 [head]	3
+FSGLDIV.X FP0,FP1	53
+FSGLDIV.X FP0,FP1 [release]	21
+FSGLDIV.X FP0,FP1 [head]	3
+FSGLDIV.L (A0),FP1	70
+FSGLDIV.L (A0),FP1 [release]	38
+FSGLDIV.L (A0),FP1 [head]	23
+FSGLDIV.S (A0),FP1	70
+FSGLDIV.S (A0),FP1 [release]	27
+FSGLDIV.S (A0),FP1 [head]	23
+FSGLDIV.D (A0),FP1	86
+FSGLDIV.D (A0),FP1 [release]	44
+FSGLDIV.D (A0),FP1 [head]	33
+FSGLDIV.X (A0),FP1	94
+FSGLDIV.X (A0),FP1 [release]	52
+FSGLDIV.X (A0),FP1 [head]	43
+FSGLDIV.P (A0),FP1	133
+FSGLDIV.P (A0),FP1 [release]	60
+FSGLDIV.P (A0),FP1 [head]	4
+FSGLMUL.X FP0,FP1	33
+FSGLMUL.X FP0,FP1 [release]	21
+FSGLMUL.X FP0,FP1 [head]	12
+FSGLMUL.L (A0),FP1	50
+FSGLMUL.L (A0),FP1 [release]	38
+FSGLMUL.L (A0),FP1 [head]	23
+FSGLMUL.S (A0),FP1	50
+FSGLMUL.S (A0),FP1 [release]	27
+FSGLMUL.S (A0),FP1 [head]	23
+FSGLMUL.D (A0),FP1	56
+FSGLMUL.D (A0),FP1 [release]	44
+FSGLMUL.D (A0),FP1 [head]	33
+FSGLMUL.X (A0),FP1	64
+FSGLMUL.X (A0),FP1 [release]	52
+FSGLMUL.X (A0),FP1 [head]	43
+FSGLMUL.P (A0),FP1	112
+FSGLMUL.P (A0),FP1 [release]	60
+FSGLMUL.P (A0),FP1 [head]	3
+FSIN.X FP0,FP1	153
+FSIN.X FP0,FP1 [release]	21
+FSIN.X FP0,FP1 [head]	13
+FSIN.L (A0),FP1	180
+FSIN.L (A0),FP1 [release]	38
+FSIN.L (A0),FP1 [head]	23
+FSIN.S (A0),FP1	160
+FSIN.S (A0),FP1 [release]	27
+FSIN.S (A0),FP1 [head]	13
+FSIN.D (A0),FP1	176
+FSIN.D (A0),FP1 [release]	44
+FSIN.D (A0),FP1 [head]	33
+FSIN.X (A0),FP1	184
+FSIN.X (A0),FP1 [release]	52
+FSIN.X (A0),FP1 [head]	43
+FSIN.P (A0),FP1	232
+FSIN.P (A0),FP1 [release]	60
+FSIN.P (A0),FP1 [head]	3
+FSINCOS.X FP0,FP2:FP1	253
+FSINCOS.X FP0,FP2:FP1 [release]	21
+FSINCOS.X FP0,FP2:FP1 [head]	3
+FSINCOS.L (A0),FP2:FP1	290
+FSINCOS.L (A0),FP2:FP1 [release]	38
+FSINCOS.L (A0),FP2:FP1 [head]	23
+FSINCOS.S (A0),FP2:FP1	270
+FSINCOS.S (A0),FP2:FP1 [release]	27
+FSINCOS.S (A0),FP2:FP1 [head]	23
+FSINCOS.D (A0),FP2:FP1	276
+FSINCOS.D (A0),FP2:FP1 [release]	44
+FSINCOS.D (A0),FP2:FP1 [head]	33
+FSINCOS.X (A0),FP2:FP1	284
+FSINCOS.X (A0),FP2:FP1 [release]	52
+FSINCOS.X (A0),FP2:FP1 [head]	33
+FSINCOS.P (A0),FP2:FP1	332
+FSINCOS.P (A0),FP2:FP1 [release]	60
+FSINCOS.P (A0),FP2:FP1 [head]	3
+FSINH.X FP0,FP1	173
+FSINH.X FP0,FP1 [release]	21
+FSINH.X FP0,FP1 [head]	3
+FSINH.L (A0),FP1	190
+FSINH.L (A0),FP1 [release]	38
+FSINH.L (A0),FP1 [head]	13
+FSINH.S (A0),FP1	190
+FSINH.S (A0),FP1 [release]	27
+FSINH.S (A0),FP1 [head]	23
+FSINH.D (A0),FP1	206
+FSINH.D (A0),FP1 [release]	44
+FSINH.D (A0),FP1 [head]	33
+FSINH.X (A0),FP1	214
+FSINH.X (A0),FP1 [release]	52
+FSINH.X (A0),FP1 [head]	43
+FSINH.P (A0),FP1	252
+FSINH.P (A0),FP1 [release]	60
+FSINH.P (A0),FP1 [head]	3
+FSQRT.X FP0,FP1	43
+FSQRT.X FP0,FP1 [release]	21
+FSQRT.X FP0,FP1 [head]	3
+FSQRT.L (A0),FP1	60
+FSQRT.L (A0),FP1 [release]	38
+FSQRT.L (A0),FP1 [head]	23
+FSQRT.S (A0),FP1	60
+FSQRT.S (A0),FP1 [release]	27
+FSQRT.S (A0),FP1 [head]	23
+FSQRT.D (A0),FP1	76
+FSQRT.D (A0),FP1 [release]	44
+FSQRT.D (A0),FP1 [head]	33
+FSQRT.X (A0),FP1	84
+FSQRT.X (A0),FP1 [release]	52
+FSQRT.X (A0),FP1 [head]	43
+FSQRT.P (A0),FP1	123
+FSQRT.P (A0),FP1 [release]	60
+FSQRT.P (A0),FP1 [head]	4
+FSUB.X FP0,FP1	23
+FSUB.X FP0,FP1 [release]	21
+FSUB.X FP0,FP1 [head]	3
+FSUB.L (A0),FP1	40
+FSUB.L (A0),FP1 [release]	38
+FSUB.L (A0),FP1 [head]	23
+FSUB.S (A0),FP1	40
+FSUB.S (A0),FP1 [release]	27
+FSUB.S (A0),FP1 [head]	23
+FSUB.D (A0),FP1	56
+FSUB.D (A0),FP1 [release]	44
+FSUB.D (A0),FP1 [head]	33
+FSUB.X (A0),FP1	64
+FSUB.X (A0),FP1 [release]	52
+FSUB.X (A0),FP1 [head]	43
+FSUB.P (A0),FP1	112
+FSUB.P (A0),FP1 [release]	60
+FSUB.P (A0),FP1 [head]	3
+FTAN.X FP0,FP1	274
+FTAN.X FP0,FP1 [release]	21
+FTAN.X FP0,FP1 [head]	4
+FTAN.L (A0),FP1	310
+FTAN.L (A0),FP1 [release]	38
+FTAN.L (A0),FP1 [head]	23
+FTAN.S (A0),FP1	290
+FTAN.S (A0),FP1 [release]	27
+FTAN.S (A0),FP1 [head]	23
+FTAN.D (A0),FP1	306
+FTAN.D (A0),FP1 [release]	44
+FTAN.D (A0),FP1 [head]	33
+FTAN.X (A0),FP1	314
+FTAN.X (A0),FP1 [release]	52
+FTAN.X (A0),FP1 [head]	43
+FTAN.P (A0),FP1	362
+FTAN.P (A0),FP1 [release]	60
+FTAN.P (A0),FP1 [head]	3
+FTANH.X FP0,FP1	173
+FTANH.X FP0,FP1 [release]	21
+FTANH.X FP0,FP1 [head]	13
+FTANH.L (A0),FP1	190
+FTANH.L (A0),FP1 [release]	38
+FTANH.L (A0),FP1 [head]	23
+FTANH.S (A0),FP1	190
+FTANH.S (A0),FP1 [release]	27
+FTANH.S (A0),FP1 [head]	23
+FTANH.D (A0),FP1	196
+FTANH.D (A0),FP1 [release]	44
+FTANH.D (A0),FP1 [head]	33
+FTANH.X (A0),FP1	204
+FTANH.X (A0),FP1 [release]	52
+FTANH.X (A0),FP1 [head]	43
+FTANH.P (A0),FP1	252
+FTANH.P (A0),FP1 [release]	60
+FTANH.P (A0),FP1 [head]	3
+FTENTOX.X FP0,FP1	143
+FTENTOX.X FP0,FP1 [release]	21
+FTENTOX.X FP0,FP1 [head]	13
+FTENTOX.L (A0),FP1	40
+FTENTOX.L (A0),FP1 [release]	38
+FTENTOX.L (A0),FP1 [head]	23
+FTENTOX.S (A0),FP1	160
+FTENTOX.S (A0),FP1 [release]	27
+FTENTOX.S (A0),FP1 [head]	23
+FTENTOX.D (A0),FP1	166
+FTENTOX.D (A0),FP1 [release]	44
+FTENTOX.D (A0),FP1 [head]	33
+FTENTOX.X (A0),FP1	174
+FTENTOX.X (A0),FP1 [release]	52
+FTENTOX.X (A0),FP1 [head]	43
+FTENTOX.P (A0),FP1	222
+FTENTOX.P (A0),FP1 [release]	60
+FTENTOX.P (A0),FP1 [head]	3
+FTST.X FP0	23
+FTST.X FP0 [release]	21
+FTST.X FP0 [head]	13
+FTST.L (A0)	40
+FTST.L (A0) [release]	38
+FTST.L (A0) [head]	23
+FTST.S (A0)	30
+FTST.S (A0) [release]	27
+FTST.S (A0) [head]	23
+FTST.D (A0)	46
+FTST.D (A0) [release]	44
+FTST.D (A0) [head]	33
+FTST.X (A0)	54
+FTST.X (A0) [release]	52
+FTST.X (A0) [head]	43
+FTST.P (A0)	93
+FTST.P (A0) [release]	60
+FTST.P (A0) [head]	4
+FTWOTOX.X FP0,FP1	83
+FTWOTOX.X FP0,FP1 [release]	21
+FTWOTOX.X FP0,FP1 [head]	3
+FTWOTOX.L (A0),FP1	40
+FTWOTOX.L (A0),FP1 [release]	38
+FTWOTOX.L (A0),FP1 [head]	22
+FTWOTOX.S (A0),FP1	100
+FTWOTOX.S (A0),FP1 [release]	27
+FTWOTOX.S (A0),FP1 [head]	23
+FTWOTOX.D (A0),FP1	116
+FTWOTOX.D (A0),FP1 [release]	44
+FTWOTOX.D (A0),FP1 [head]	33
+FTWOTOX.X (A0),FP1	124
+FTWOTOX.X (A0),FP1 [release]	52
+FTWOTOX.X (A0),FP1 [head]	43
+FTWOTOX.P (A0),FP1	162
+FTWOTOX.P (A0),FP1 [release]	60
+FTWOTOX.P (A0),FP1 [head]	3
+FADD.L D0,FP1	36
+FADD.L D0,FP1 [release]	34
+FADD.L D0,FP1 [head]	13
+FMOVE.L FP0,(A1)	57
+FMOVE.L FP0,(A1) [release]	55
+FMOVE.L FP0,(A1) [head]	3
+FMOVE.S FP0,(A1)	57
+FMOVE.S FP0,(A1) [release]	55
+FMOVE.S FP0,(A1) [head]	3
+FMOVE.D FP0,(A1)	66
+FMOVE.D FP0,(A1) [release]	64
+FMOVE.D FP0,(A1) [head]	3
+FMOVE.X FP0,(A1)	59
+FMOVE.X FP0,(A1) [release]	57
+FMOVE.X FP0,(A1) [head]	53
+FMOVE.P FP0,(A1) {#17}	606
+FMOVE.P FP0,(A1) {#17} [release]	604
+FMOVE.P FP0,(A1) {#17} [head]	13
+FMOVE.L FP0,D0	46
+FMOVE.L FP0,D0 [release]	44
+FMOVE.L FP0,D0 [head]	3
+FMOVECR #0,FP1	23
+FMOVECR #0,FP1 [release]	21
+FMOVECR #0,FP1 [head]	13
+FMOVE.L FPCR,D0	36
+FMOVE.L FPCR,(A1)	47
+FMOVE.L D0,FPCR	34
+FMOVE.L (A0),FPCR	38
+FMOVE.L #0,FPCR	44
+FMOVEM.L FPCR/FPSR/FPIAR,(A1)	56
+FMOVEM.L (A0),FPCR/FPSR/FPIAR	60
+FMOVEM.X FP0,(A1)	63
+FMOVEM.X FP0-FP3,(A1)	135
+FMOVEM.X (A0),FP0	63
+FMOVEM.X (A0),FP0-FP3	135
+FMOVEM.X D0,(A1), 4 registers	147
+FMOVEM.X (A0),D0, 4 registers	147
+FBEQ.W, taken	28
+FBNE.W, not taken	20
+FBEQ.L, taken	34
+FBNE.L, not taken	27
+FDBEQ, true, not taken	25
+FDBNE, false, not taken	26
+FDBNE, false, taken	33
+FNOP	20
+FSEQ D0	29
+FSEQ (A1)	32
+FTRAPEQ, taken, and RTE	97
+FTRAPNE, not taken	28
+FTRAPNE.W, not taken	30
+FTRAPNE.L, not taken	31
+FSAVE (A1), null	43
+FSAVE (A1), idle	155
+FRESTORE (A0), null	30
+FRESTORE (A2), idle	145

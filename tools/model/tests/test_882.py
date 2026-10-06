@@ -92,6 +92,22 @@ class Dialogs(unittest.TestCase):
         self.fpu.tick(SLOW + 1)
         self.assertEqual(F.decode_x(self.fpu.st.fp[1]), fin(0, 3, 0))
 
+    def test_ca0_store(self):
+        """FPU 7.5.1.3, figure 7-21: FMOVE.X out takes its operand with
+        CA = 0, and the MPU does not read the response after it; a NaN
+        source takes figure 7-20's dialog."""
+        self.load(1, fin(0, 5, 0))
+        self.fpu.log.clear()
+        self.m.a[0] = 0x4000
+        p = self.m.fgen(cmd(3, F.FMT_X, 1, 0), ('ind', 0))
+        self.assertEqual(p, 0x320C)
+        self.assertEqual(responses(self.fpu)[-1], 0x320C)
+        self.assertEqual(self.m.mem.read(0x4000, 4), 0x40010000)
+        self.fpu.log.clear()
+        p = self.m.fgen(cmd(3, F.FMT_X, 5, 0), ('ind', 0))       # FP5: the reset NaN
+        self.assertEqual(p, C.P_IDLE)
+        self.assertIn(0xB20C, responses(self.fpu))
+
     def test_overlap(self):
         """FPU 5.1.1.2: the second instruction's dialog runs while the first
         computes; neither waits for the APU."""

@@ -21,6 +21,7 @@
 |   E  an invalid effective address in the CU's dialog: AB aborts it alone
 |      (FPU 7.2.2), the APU's instruction completes
 |   F  a conditional after overlapped instructions (table 5-6)
+|   G  the fully concurrent FMOVEs (table 5-5), and FPSR in program order
 |
 |   RES+$00  'DONE'            RES+$04  checks made      RES+$08  checks failed
 |   RES+$0C  first failing check, RES+$10  an unexpected exception's vector
@@ -212,6 +213,41 @@ cmdc:   fadd.s  s_two, %fp3                 | CA = 0, the CU holds it: 11
         bsr     check
 
 | ---------------------------------------------------------------------------
+| G. FMOVEs the CU completes while FETOX computes (table 5-5): in from a
+| double, register to register, out to extended; one whose destination is
+| FETOX's (f) waits. FPSR ends as in sequence: the last FMOVE's condition
+| codes, its exception byte (clear), FETOX's inexact accrued. (FETOX:
+| the FPU's clock is three times the CPU's, and a short instruction would
+| be over before the next one's operand is in.)
+| ---------------------------------------------------------------------------
+        fmove.l #0, %fpcr
+        fmove.l #0, %fpsr
+        fmove.l #2, %fp3
+        fmove.l #7, %fp4
+        fetox.x %fp3                        | e^2, long: INEX2
+        fmove.d d_m2, %fp1                  | -2, in the CU
+        fmove.x %fp1, %fp2                  | in the CU
+        fmove.x %fp2, BUF                   | out, CA = 0
+        fmove.d d_m2, %fp5                  | the last: N
+        fmove.l %fpsr, %d0
+        move.l  #0x08000008, %d1            | N; EXC clear; AEXC INEX
+        bsr     check
+        fmove.l %fp2, %d0
+        moveq   #-2, %d1
+        bsr     check
+        move.l  BUF, %d0
+        move.l  #0xC0000000, %d1
+        bsr     check
+        move.l  BUF+4, %d0
+        move.l  #0x80000000, %d1
+        bsr     check
+        fetox.x %fp4                        | the APU writes FP4 ...
+        fmove.s s_two, %fp4                 | ... so this one waits (f)
+        fmove.l %fp4, %d0
+        moveq   #2, %d1
+        bsr     check
+
+| ---------------------------------------------------------------------------
 | Done
 | ---------------------------------------------------------------------------
         move.l  #0x444F4E45, RES
@@ -299,6 +335,7 @@ unexpected:
 huge:   .long   0x7FFE0000, 0x80000000, 0x00000000   | 2^16383
 tiny:   .long   0x00010000, 0x80000000, 0x00000000   | 2^-16382
 d_one:  .long   0x3FF00000, 0x00000000               | 1.0, double
+d_m2:   .long   0xC0000000, 0x00000000               | -2.0, double
 ddata:  .long   0x400921FB, 0x54442D18               | pi, double
 s_two:  .long   0x40000000                           | 2.0, single
 nexc:   .long   0

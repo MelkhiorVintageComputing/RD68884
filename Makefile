@@ -88,6 +88,9 @@ help:
 	@echo "Boards:"
 	@echo "  make board-iisia7 bitstream and flash image for the IIsiA7 Mini (BOARD_DIVIDE=20: 50 MHz)"
 	@echo
+	@echo "RD68885, the MC68882 build (doc/rd68885.md): add MODEL=68882 to sys, cycles,"
+	@echo "synth, board-iisia7, tme or sunos; lint, audit and sim cover it already."
+	@echo
 	@echo "Vendor tools, minutes each:"
 	@echo "  make synth        Vivado synthesis only ($(XPART)), out of context"
 	@echo "  make impl         Vivado place and route ($(XPART)), out of context"
@@ -434,7 +437,8 @@ sys: ucode-check rd68021 $(SYSHEX)
 	      grep -q '^PASS' $(BUILD)/sys-$$p-$$port.cmp || ok=0; \
 	    fi; \
 	    if [ $$port = 32 ]; then \
-	      $(PYENV) python3 tools/iss/lockstep.py $(BUILD)/sys-$$p.lockstep --model $(MODEL) | sed 's/^/  /' || ok=0; \
+	      $(PYENV) python3 tools/iss/lockstep.py $(BUILD)/sys-$$p.lockstep --model $(MODEL) | sed 's/^/  /'; \
+	      [ $${PIPESTATUS[0]} -eq 0 ] || ok=0; \
 	    fi; \
 	  done; \
 	done; test $$ok -eq 1 && echo "PASS: sys"
@@ -453,6 +457,25 @@ sys: ucode-check rd68021 $(SYSHEX)
 # frozen again (FREEZE=1). The tables in the doc are regenerated from the
 # measurement.
 # ---------------------------------------------------------------------------
+ifeq ($(MODEL),68882)
+# RD68885 (doc/rd68885.md): totals, releases and heads against Table 8-3, the
+# design point only.
+cycles: ucode-check rd68021
+	@mkdir -p $(BUILD)/programs
+	@python3 tools/cycles.py gen $(BUILD)/programs/cycles82.S --model 68882
+	@$(CROSS)as -mcpu=68020 -m68881 -o $(BUILD)/programs/cycles82.o $(BUILD)/programs/cycles82.S
+	@$(CROSS)ld --no-warn-rwx-segments -T sim/programs/flat.ld -o $(BUILD)/programs/cycles82.elf $(BUILD)/programs/cycles82.o
+	@$(CROSS)objcopy -O verilog --verilog-data-width=1 $(BUILD)/programs/cycles82.elf $(BUILD)/programs/cycles82.hex
+	@rd="$$(cd $(RDSRC) && $(MAKE) -s print-rtl | sed 's#\(\S*\)#$(RDSRC)/\1#g')"; \
+	  iverilog $(IVFLAGS) -DSYS_PORT=32 -DSYS_MODEL=68882 -o $(BUILD)/cycles_tb_82.vvp -s sys_tb \
+	    $(RTL) $$rd $(RDSRC)/sim/models/rd68021_slave.sv sim/tb/sys_tb.sv \
+	    > $(BUILD)/cycles_tb.clog 2>&1 || { grep -v $(NOTES) $(BUILD)/cycles_tb.clog | head; exit 1; }
+	@vvp $(BUILD)/cycles_tb_82.vvp +image=$(BUILD)/programs/cycles82.hex +limit=8000000 \
+	  +fpu_ns=20 +dump=$(BUILD)/cycles82.dump > $(BUILD)/cycles82.log 2>&1; \
+	  grep -q '^PASS' $(BUILD)/cycles82.log || { tail -3 $(BUILD)/cycles82.log; exit 1; }
+	@$(PYENV) python3 tools/cycles.py check82 $(BUILD)/cycles82.dump \
+	  --doc doc/timing-divergences.md $(if $(FREEZE),--freeze)
+else
 cycles: ucode-check rd68021
 	@mkdir -p $(BUILD)/programs
 	@python3 tools/cycles.py gen $(BUILD)/programs/cycles.S
@@ -474,6 +497,7 @@ cycles: ucode-check rd68021
 	@$(PYENV) python3 tools/cycles.py check $(BUILD)/cycles.dump $(BUILD)/cycles-fast.dump \
 	  --sync $(BUILD)/cycles-sync.dump --slow $(BUILD)/cycles-slow.dump \
 	  --doc doc/timing-divergences.md $(if $(FREEZE),--freeze)
+endif
 
 # ---------------------------------------------------------------------------
 # SunOS 4.1.1 with RD68884 as the FPU -- doc/system.md (M9)
@@ -492,10 +516,11 @@ cycles: ucode-check rd68021
 # installer in Run-Sun3-SunOS-4.1.1's diskimage/; SUNOS_IMG says where.
 # ---------------------------------------------------------------------------
 SUN3SRC   := Inputs/ref/Run-Sun3-SunOS-4.1.1
-TMEB      := $(BUILD)/tme
+MSUF      := $(if $(filter 68882,$(MODEL)),-68882)
+TMEB      := $(BUILD)/tme$(MSUF)
 TMEENV    := LTDL_LIBRARY_PATH=$(CURDIR)/$(TMEB)/inst/lib
 SUNOS_IMG ?= $(HOME)/Run-Sun3-SunOS-4.1.1/diskimage/work/sunos411-sun3.img
-SUNOSDIR  := $(BUILD)/sunos
+SUNOSDIR  := $(BUILD)/sunos$(MSUF)
 SUNOS_SECS ?= 21600
 # The time stamps: "Thu Sep 24 16:08:05 GMT 2026" and "Sep 24 16:08:10 sun3 ...".
 STAMPS    := sed -E 's/[A-Z][a-z]{2} [A-Z][a-z]{2} [ 0-9][0-9] [0-9:]{8} [A-Z]+ [0-9]{4}/DATE/; s/^[A-Z][a-z]{2} [ 0-9][0-9] [0-9:]{8} /STAMP /'
@@ -503,7 +528,7 @@ STAMPS    := sed -E 's/[A-Z][a-z]{2} [A-Z][a-z]{2} [ 0-9][0-9] [0-9:]{8} [A-Z]+ 
 tme: dirs rd68021
 	@test -d $(SUN3SRC)/tme-0.8_up || { echo "FAIL: no $(SUN3SRC): git submodule update --init"; exit 1; }
 	@rd="$$(cd $(RDSRC) && $(MAKE) -s print-rtl | sed 's#\(\S*\)#$(CURDIR)/$(RDSRC)/\1#g')"; \
-	  BUS_SYNC=$(BUS_SYNC) BUS_SYNC_WAIT=$(BUS_SYNC_WAIT) TME_BUILD=$(CURDIR)/$(TMEB) \
+	  BUS_SYNC=$(BUS_SYNC) BUS_SYNC_WAIT=$(BUS_SYNC_WAIT) MODEL=$(MODEL) TME_BUILD=$(CURDIR)/$(TMEB) \
 	  RD_TME=$(CURDIR)/$(RDTME) \
 	  sim/tme/build.sh $(CURDIR) $(CURDIR)/$(RDSRC) $$rd $(addprefix $(CURDIR)/,$(RTL)) $(CURDIR)/$(VLT)
 
@@ -523,7 +548,7 @@ sunos: tme
 	  cp $(SUNOSDIR)/prom.bin $(SUNOSDIR)/sun3-idprom.bin $$d/; \
 	  cp $(SUNOSDIR)/eeprom.bin $$d/sun3-eeprom.bin; \
 	  cp --sparse=always "$(SUNOS_IMG)" $$d/disk.img; \
-	  arg="tme/ic/m68020 fpu-type m68881 fpu-compliance unknown fpu-incomplete line-f"; \
+	  arg="tme/ic/m68020 fpu-type m$(MODEL) fpu-compliance unknown fpu-incomplete line-f"; \
 	  [ $$cpu = rd68021 ] && arg="tme/ic/rd68021 log rd68021.log fpu mh882"; \
 	  sed "s|@CPU@|$$arg|" $(RDSRC)/sim/tme/SUNOS-DISK.in > $$d/SUNOS; \
 	  (cd $$d && PROMPT='login: *|# *' T=$(CURDIR)/$(TMEB)/inst \
@@ -538,7 +563,7 @@ sunos: tme
 	    && grep 'MH882:' $(SUNOSDIR)/rd68021/rd68021.log | tail -1 \
 	       | grep -qv ' 0 general and 0 conditional'; then \
 	  sed -n '/# \.\/t/,$$p' $(SUNOSDIR)/rd68021/console.txt | sed 's/^/    /'; echo; \
-	  echo "  sunos: $$(wc -l < $(SUNOSDIR)/rd68021/console.txt) lines of console output identical to TME's m68020 with its MC68881, time stamps aside"; \
+	  echo "  sunos: $$(wc -l < $(SUNOSDIR)/rd68021/console.txt) lines of console output identical to TME's m68020 with its MC$(MODEL), time stamps aside"; \
 	  echo "PASS: sunos"; \
 	else \
 	  echo "FAIL: sunos -- the console output differs, or no coprocessor instruction ran"; \
@@ -582,7 +607,7 @@ impl: dirs $(if $(filter 1,$(BUS_SYNC)),$(BUILD)/rd68884_sync.xdc)
 IISI_PLATFORM := Inputs/IIsiFPGA/IIsi-to-ztex-gateware/IIsiA7_Mini_pds.py
 IISI_PART     ?= xc7a50tftg256-1
 BOARD_DIVIDE  ?= 20
-IISI_BUILD    := $(BUILD)/iisia7_mini
+IISI_BUILD    := $(BUILD)/iisia7_mini$(if $(filter 68882,$(MODEL)),-68882)
 
 board-iisia7: dirs
 	@test -f $(IISI_PLATFORM) || { echo "FAIL: no $(IISI_PLATFORM): git submodule update --init"; exit 1; }
@@ -591,7 +616,7 @@ board-iisia7: dirs
 	@printf '%s\n' $(addprefix $(CURDIR)/,$(RTL)) > $(IISI_BUILD)/rtl.f
 	@cd $(IISI_BUILD) && $(CURDIR)/scripts/vivado.sh -mode batch -nojournal -nolog \
 	    -source $(CURDIR)/boards/iisia7_mini/build.tcl \
-	    -tclargs $(CURDIR) $(IISI_PART) $(BOARD_DIVIDE) > build.log 2>&1; rc=$$?; \
+	    -tclargs $(CURDIR) $(IISI_PART) $(BOARD_DIVIDE) $(MODEL) > build.log 2>&1; rc=$$?; \
 	  grep -E '^(RD68884|ERROR|CRITICAL WARNING)' build.log; exit $$rc
 
 # quartus_map returns 0 on the thing that matters most, so the grep is the gate:

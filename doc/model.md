@@ -100,7 +100,7 @@ The microcode's busy frame has its own layout (doc/microcode.md); the frame is o
 
 ## The MC68882 (`FPU882`)
 
-`FPU882` is `FPU881` with a conversion unit (CU) beside the APU (FPU 5.1.1.2). It models stage A of doc/rd68885.md.
+`FPU882` is `FPU881` with a conversion unit (CU) beside the APU (FPU 5.1.1.2). It models stage A of doc/rd68885.md. Stage B, the FMOVEs the CU completes by itself (table 5-5), changes only when things happen, not what the program sees, so the model leaves it out. The ISS and the RTL have it, and `tools/iss/tests/test_overlap.py` holds them to this model.
 
 **What it does, from the manual:**
 - **The CU.** While the APU computes, the CU takes the next instruction if it is register to register (FMOVECR included) or opclass 010 with a B, W, L, S, D or X source. It runs that instruction's dialog with the main processor, then waits to hand it to the APU.
@@ -121,7 +121,9 @@ The microcode's busy frame has its own layout (doc/microcode.md); the frame is o
 | FMOVEM or a control-register move while an exception holds an instruction in the CU | Reports the exception, as an arithmetic instruction would. Going ahead would show it the registers before the CU's instruction has run. With the CU empty they do not report, as on the MC68881 (FPU 6.4.2.2) |
 | The idle response | `$0802` (PF = 1) only when the APU and the CU are both empty; `$0900` otherwise |
 | AB outside its window (FPU 7.2.2: "undefined") | The BIU returns to idle; the APU and a released CU instruction are untouched |
-| A take-exception primitive at FSAVE | Not saved as a pending instruction: the main processor starts the instruction again after the handler |
+| A take-exception primitive at FSAVE | Not saved as a pending instruction once the main processor has read it: it starts the instruction again after the handler. One not yet read is saved as the pending instruction, as `FPU881` does |
+| The extended store (FMOVE.X FPm,`<ea>`, FPU 7.5.1.3) | CA = 0 (`$320C`, figure 7-21) for a normal, zero or infinite source; a NaN, unnormal or denormal one takes figure 7-20's dialog |
+| The fully concurrent FMOVEs (table 5-5), in the ISS and RTL | Also only when no exception is enabled. The older instruction in the APU cannot trap after the younger FMOVE has completed, and no PC is passed. Their FPSR effects (condition codes, the cleared exception byte) wait for the APU's instruction to end, so FPSR follows program order |
 
 **Idle frame `$1F38`.** The MC68881's layout, with the CU's eight long words after the command word (FPU figure 6-5):
 

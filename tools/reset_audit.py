@@ -92,6 +92,13 @@ EXEMPT = {'the microcode store read register, rd68884_ucode_rom.rom_q': fields.w
           'the register file read register, rd68884_regfile.q': 91,
           'the constant ROM read register, rd68884_crom.rom_q': 92}
 
+# And in the MC68882 build (MODEL=68882, doc/rd68885.md) a fourth: the register
+# file's second read register (rd68884_regfile.qb), 91 bits, the conversion
+# unit's. The same argument: nothing reads it before the CU has issued a read
+# (rd68884_biu's cu_rd). The MC68881 build leaves the port undriven, and
+# synthesis removes it.
+EXEMPT82 = {'the register file second read register, rd68884_regfile.qb': 91}
+
 FORBIDDEN = [
     (re.compile(r'^\s*initial\b'),
      "`initial` block -- ASIC has no power-on state"),
@@ -224,7 +231,10 @@ def main():
                 print(f'  {c}: {n}')
             print('  Add it to RESET_FF or UNRESET_FF in tools/reset_audit.py.')
 
-        allowed = sum(EXEMPT.values())
+        exempt = dict(EXEMPT)
+        if 'MODEL=68882' in args.param:
+            exempt.update(EXEMPT82)
+        allowed = sum(exempt.values())
         found = sum(unreset.values())
         if found > allowed:
             failed = True
@@ -236,7 +246,7 @@ def main():
             failed = True
             print(f'FAIL: audit -- {allowed} registers are exempted but only {found} '
                   f'unreset cells exist. An exemption that is no longer needed is one '
-                  f'nobody will re-examine; remove it from EXEMPT.')
+                  f'nobody will re-examine; remove it from EXEMPT (or EXEMPT82).')
         elif reset == 0 and source_has_registers(args.files):
             failed = True
             print('FAIL: audit -- the source contains always_ff blocks but the '

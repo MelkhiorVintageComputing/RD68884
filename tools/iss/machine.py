@@ -18,7 +18,7 @@ import json
 import os
 
 from .biu import Biu
-from .core import Core, FP
+from .core import Core, FP, rf_word
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 UCODE = os.path.join(ROOT, 'build', 'ucode.json')
@@ -49,6 +49,12 @@ class Machine:
         self.run(200)                 # the reset microcode
 
     def clock(self):
+        c, biu = self.core, self.biu
+        if self.model == 68882:
+            # What rd68884_biu sees of the sequencer this clock.
+            biu.apu_run, biu.pcen = c.run, int((c.fpcr >> 8) & 0x7F != 0)
+            biu.prec_x = int((c.fpcr >> 6) & 3 in (0, 3))
+            biu.rfb_q = rf_word(c.rfbq)
         b = self.biu.outputs()
         if self.trace is not None:
             self.trace.append(self.core.upc)

@@ -33,7 +33,8 @@
 // unused pins three-stated with no pull (boards/iisia7_mini/build.tcl).
 
 module rd68884_iisia7_top #(
-    parameter int CLKOUT0_DIVIDE = 20       // 1000 MHz / this: the core clock
+    parameter int CLKOUT0_DIVIDE = 20,      // 1000 MHz / this: the core clock
+    parameter int MODEL          = 68881    // 68881 (RD68884) or 68882 (RD68885)
 ) (
     input  logic        clk100,
 
@@ -108,7 +109,8 @@ module rd68884_iisia7_top #(
   logic        dsack_oe;
 
   rd68884_top #(
-      .DSACK_NEGATE(1)
+      .DSACK_NEGATE(1),
+      .MODEL       (MODEL)
   ) u_fpu (
       .clk      (clk),
       .rst_n    (rst_n),

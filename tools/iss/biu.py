@@ -18,7 +18,8 @@ The MC68882 build (model=68882, doc/rd68885.md) adds the conversion unit
 (CU): while the sequencer computes a released instruction (the core's
 apu_run), the CU takes the next one, answers its first primitive itself,
 collects its operand, and holds it until the sequencer takes it (CU_TAKE).
-It adds the mandatory PC transfer (EXP_PC, FPU 6.1.12), the CA = 0 transfers
+Some FMOVEs it completes itself, without the APU (stage B, FPU table 5-5:
+cu_fm_decide). It adds the mandatory PC transfer (EXP_PC, FPU 6.1.12), the CA = 0 transfers
 (the expectation returns to a command at the last operand, FPU 7.5.1), and
 the control CIR's AB and XA bits (FPU 7.2.2).
 """
@@ -62,6 +63,79 @@ def cu_first(word, pcen):
     return 0x9000 | pc | vea | n, 1              # B, W, L
 
 
+FM_NONE, FM_IN, FM_RR, FM_XOUT = range(4)
+EXP_SPECIAL, EXP_ZERO = 16384, -16383          # tools/iss/core.py
+M72 = (1 << 72) - 1
+
+
+def fm_kind(word):
+    """FPU table 5-5's fully concurrent FMOVEs: <ea>,FPn from S, D or X;
+    FPm,FPn; FPm,<ea> to X."""
+    opclass, rx = word >> 13 & 7, word >> 10 & 7
+    if opclass == 2 and rx in (1, 5, 2) and word & 0x7F == 0:
+        return FM_IN
+    if opclass == 0 and word & 0x7F == 0:
+        return FM_RR
+    if opclass == 3 and rx == 2:
+        return FM_XOUT
+    return FM_NONE
+
+
+def apu_dests(word):
+    """The registers the APU's instruction writes: FPn, and FSINCOS's FPc."""
+    if word is None or word >> 13 & 7 not in (0, 2):
+        return set()
+    d = {word >> 7 & 7}
+    if word & 0x78 == 0x30:
+        d.add(word & 7)
+    return d
+
+
+def rf_word(sign, exp, mant):
+    return (sign << 90) | ((exp & 0x3FFFF) << 72) | mant
+
+
+def rf_fields(w):
+    e = (w >> 72) & 0x3FFFF
+    return w >> 90 & 1, e - (1 << 18) if e >> 17 else e, w & M72
+
+
+def fm_ok(sign, exp, mant):
+    """Table 5-5 (b): a normal, zero or infinite value -- in its canonical
+    form, which the APU's FMOVE would leave unchanged."""
+    if exp == EXP_SPECIAL:
+        return mant == 0
+    if mant == 0:
+        return exp == EXP_ZERO
+    return bool(mant >> 71 & 1)
+
+
+def fm_cc(sign, exp, mant):
+    """FPSR's condition codes (N Z I NAN) of such a value."""
+    return (sign << 3) | (int(exp != EXP_SPECIAL and mant == 0) << 2) | (int(exp == EXP_SPECIAL) << 1)
+
+
+def fm_unpack(word, d):
+    """An S, D or X operand in the register file's form, or None if table
+    5-5 (b) sends it to the APU (a NaN, denormal or unnormal)."""
+    rx = word >> 10 & 7
+    if rx == 2:
+        s, e, m = d[0] >> 31, d[0] >> 16 & 0x7FFF, (d[1] << 32) | d[2]
+        if e == 0x7FFF:
+            return (s, EXP_SPECIAL, 0) if m & ((1 << 63) - 1) == 0 else None
+        if e == 0:
+            return (s, EXP_ZERO, 0) if m == 0 else None
+        return (s, e - 16383, m << 8) if m >> 63 else None
+    eb, fb = (8, 23) if rx == 1 else (11, 52)
+    v = d[0] if rx == 1 else (d[0] << 32) | d[1]
+    s, e, f = v >> (eb + fb), v >> fb & ((1 << eb) - 1), v & ((1 << fb) - 1)
+    if e == (1 << eb) - 1:
+        return (s, EXP_SPECIAL, 0) if f == 0 else None
+    if e == 0:
+        return (s, EXP_ZERO, 0) if f == 0 else None
+    return (s, e - ((1 << (eb - 1)) - 1), (1 << 71) | (f << (71 - fb)))
+
+
 def is_fp_take(resp):
     """A take-exception primitive for a floating-point exception (vectors
     48-54): the MC68882 keeps reporting it past XA (FPU 7.2.2, 7.4.2.5)."""
@@ -93,11 +167,18 @@ class Biu:
         self.apu_run, self.pcen = 0, 0          # from the core, last clock
         self.resp_xfer, self.ca0 = 0, 0         # CA = 0: long words to come
         self.pc_after, self.pc_cu = EXP_CMD, 0  # after the PC; whose it is
+        self.prec_x, self.rfb_q = 1, 0          # from the core, this clock
+        self.apu_word = None                    # the APU's instruction
+        self.dcc_v, self.dcc_cc_v, self.dcc_cc = 0, 0, 0
+        self._fmdec = {}
         self.cu_clear()
 
     def cu_clear(self):
         self.cu_v, self.cu_word, self.cu_rel, self.cu_pcv = 0, 0, 0, 0
         self.cu_pc, self.cu_d, self.cu_cnt, self.cu_bwl = ONES, [ONES] * 3, 0, 0
+        # Stage B: which fully concurrent FMOVE it is; the APU path chosen
+        # instead (Table 5-5 (b)); FPm read; an extended store's operand out.
+        self.cu_fm, self.cu_nofm, self.cu_rd, self.cu_xrd = FM_NONE, 0, 0, 0
 
     # ---------------------------------------------------- the core's view
     def cu_dlg(self):
@@ -106,7 +187,86 @@ class Biu:
 
     def cu_ready(self):
         return int(bool(self.cu_v and self.cu_cnt == 0 and (self.cu_rel or self.cu_bwl)
-                        and not (self.expect == EXP_PC and self.pc_cu)))
+                        and not (self.expect == EXP_PC and self.pc_cu)
+                        and not (self.cu_fm in (FM_IN, FM_RR) and not self.cu_nofm
+                                 and self._fm_conds())))
+
+    # ------------------------------------------------- stage B: FMOVE in the CU
+    def _fm_conds(self):
+        """FPU table 5-5: the CU completes the FMOVE itself while the APU
+        computes, if the rounding precision is extended (c) and no register
+        conflicts with the APU instruction's destination (a, f). MODEL
+        CHOICE (doc/model.md): and no exception is enabled, so the older
+        instruction cannot trap after the younger has completed."""
+        w = self.cu_word
+        dests = apu_dests(self.apu_word)
+        ok = self.apu_run and not self.pcen and (self.prec_x or self.cu_fm == FM_XOUT)
+        if self.cu_fm == FM_RR:
+            ok = ok and (w >> 10 & 7) not in dests
+        if self.cu_fm in (FM_IN, FM_RR, FM_XOUT):
+            ok = ok and (w >> 7 & 7) not in dests
+        return bool(ok)
+
+    def _cu_takes(self, word):
+        if cu_takes(word):
+            return True
+        # The extended store, only when it will complete in the CU.
+        return fm_kind(word) == FM_XOUT and self.apu_run and not self.pcen and \
+            (word >> 7 & 7) not in apu_dests(self.apu_word)
+
+    def _fm_decide(self):
+        """This clock's step for a fully concurrent FMOVE held in the CU,
+        from the state at the start of the clock (rtl/rd68884_biu.sv)."""
+        if self.model != 68882 or not self.cu_v or self.cu_fm == FM_NONE or self.cu_nofm:
+            return {}
+        k, w = self.cu_fm, self.cu_word
+        if self.cu_cnt or self.cu_xrd or (self.expect == EXP_PC and self.pc_cu):
+            return {}
+        if k in (FM_IN, FM_RR) and not self.cu_rel:
+            return {}
+        if not self._fm_conds():
+            return {'relatch': 1} if k == FM_XOUT else {}
+        fn = w >> 7 & 7
+        if k == FM_IN:
+            v = fm_unpack(w, self.cu_d)
+            if v is None:
+                return {'nofm': 1}
+            return {'we': 1, 'wa': fn, 'wd': rf_word(*v), 'cc': fm_cc(*v), 'done': 1}
+        if not self.cu_rd:
+            return {'re': 1, 'ra': (w >> 10 & 7) if k == FM_RR else fn, 'rd': 1}
+        v = rf_fields(self.rfb_q)
+        if not fm_ok(*v):
+            return {'nofm': 1} if k == FM_RR else {'relatch': 1}
+        if k == FM_RR:
+            return {'we': 1, 'wa': fn, 'wd': self.rfb_q, 'cc': fm_cc(*v), 'done': 1}
+        s_, e, m = v
+        return {'xout': [(s_ << 31) | (((e + 16383) & 0x7FFF) << 16),
+                         (m >> 40) & ONES, (m >> 8) & ONES]}
+
+    def _fm_apply(self, d):
+        if not d:
+            return
+        if d.get('rd'):
+            self.cu_rd = 1
+        if d.get('nofm'):
+            self.cu_nofm = 1
+        if 'cc' in d or 'xout' in d:
+            # FPSR in program order: the FMOVE's condition codes (an extended
+            # store has none) and its cleared exception byte wait for the
+            # APU's instruction to end (the core applies them, dcc_ack).
+            self.dcc_v = 1
+            if 'cc' in d:
+                self.dcc_cc_v, self.dcc_cc = 1, d['cc']
+        if d.get('done'):
+            self.cu_clear()
+        if d.get('relatch'):
+            self.cmd_pend, self.cmd_word, self.cmd_cond, self.fresh = 1, self.cu_word, 0, 0
+            self.cu_clear()
+        if 'xout' in d:
+            # Figure 7-21: evaluate <ea> and transfer data, CA = 0.
+            self.cu_d, self.cu_cnt, self.cu_xrd = d['xout'], 3, 1
+            self.resp, self.oneshot = 0x320C, 1
+            self.expect, self.expect_next = EXP_RESP, EXP_OPR
 
     def cu_words(self):
         """The CU's eight long words in a frame (doc/model.md, FPU882)."""
@@ -117,6 +277,7 @@ class Biu:
 
     def outputs(self):
         e = self.ev
+        d = self._fmdec = self._fm_decide()
         return dict(arch_reset=self.arch_reset, cmd_pend=self.cmd_pend,
                     cmd_cond=self.cmd_cond, cmd_word=self.cmd_word,
                     opw_valid=self.opw_valid, opw_data=self.opw_data,
@@ -127,7 +288,10 @@ class Biu:
                     save_read=e.get('save', 0), abort=e.get('abort', 0),
                     abort_ab=e.get('abort_ab', 0),
                     cu_ready=self.cu_ready(), cu_valid=self.cu_v, cu_mid=int(self.cu_dlg()),
-                    cu_word=self.cu_word, cu_d=list(self.cu_d), cu_save=self.cu_words())
+                    cu_word=self.cu_word, cu_d=list(self.cu_d), cu_save=self.cu_words(),
+                    rfb_re=d.get('re', 0), rfb_ra=d.get('ra', 0), rfb_we=d.get('we', 0),
+                    rfb_wa=d.get('wa', 0), rfb_wd=d.get('wd', 0),
+                    dcc_v=self.dcc_v, dcc_cc_v=self.dcc_cc_v, dcc_cc=self.dcc_cc)
 
     def from_core(self, o):
         """The core's writes, at the end of a clock (after its events)."""
@@ -182,7 +346,12 @@ class Biu:
             self._from_core82(o)
 
     def _from_core82(self, o):
+        if o['cmd_ack']:
+            self.apu_word = self.cmd_word
+        if o.get('dcc_ack'):
+            self.dcc_v = self.dcc_cc_v = 0
         if o.get('cu_take'):
+            self.apu_word = self.cu_word
             # The sequencer takes the CU's instruction (FPU 5.1.1.2). Its PC
             # becomes FPIAR (FPU 7.2.10); one still in its dialog (B, W, L)
             # is released now.
@@ -197,7 +366,7 @@ class Biu:
             # After FRESTORE of a busy frame: the CU's dialog as it was.
             if self.cu_cnt:
                 self.resp = 0x8900 if self.cu_bwl else 0x0900
-                self.expect = EXP_OPW
+                self.expect = EXP_OPR if self.cu_xrd else EXP_OPW
             else:
                 self.resp, self.expect = 0x8900, EXP_RESP
             self.oneshot = 0
@@ -207,9 +376,11 @@ class Biu:
             self.cmd_pend, self.cmd_word, self.cmd_cond = 1, o['relatch_word'], o['relatch_cond']
             self.resp, self.oneshot, self.expect = 0x8900, 0, EXP_RESP
         self.apu_run, self.pcen = o.get('apu_run', 0), o.get('pcen', 0)
+        self._fm_apply(self._fmdec)
+        self._fmdec = {}
         # A latched command the CU can take, now that it is free.
         if self.cmd_pend and not self.cu_v and self.apu_run and not o['cmd_ack'] \
-                and not self.pv and cu_takes(self.cmd_word) and not self.cmd_cond:
+                and not self.pv and self._cu_takes(self.cmd_word) and not self.cmd_cond:
             self.cmd_pend, self.fresh = 0, 0
             self._cu_accept(self.cmd_word)
 
@@ -223,15 +394,23 @@ class Biu:
             self.cu_rel, self.cu_pcv, self.cu_cnt = v >> 14 & 1, v >> 13 & 1, v & 0xFF
             rx = self.cu_word >> 10 & 7
             self.cu_bwl = int(self.cu_word >> 13 & 7 == 2 and rx in (0, 4, 6))
+            self.cu_fm, self.cu_nofm, self.cu_rd = fm_kind(self.cu_word), 0, 0
+            self.cu_xrd = int(self.cu_fm == FM_XOUT and self.cu_cnt > 0)
         elif idx == 1:
             self.cu_pc = v
         elif idx <= 4:
             self.cu_d[idx - 2] = v
 
     def _cu_accept(self, word):
-        prim, n = cu_first(word, self.pcen)
         self.cu_clear()
+        if fm_kind(word) == FM_XOUT:
+            # Figure 7-21: null (CA = 1) while the CU reads and converts.
+            self.cu_v, self.cu_word, self.cu_fm = 1, word, FM_XOUT
+            self.resp, self.oneshot, self.expect = 0x8900, 0, EXP_RESP
+            return
+        prim, n = cu_first(word, self.pcen)
         self.cu_v, self.cu_word, self.cu_cnt = 1, word, n
+        self.cu_fm = fm_kind(word)
         rx = word >> 10 & 7
         self.cu_bwl = int(word >> 13 & 7 == 2 and rx in (0, 4, 6))
         self.resp, self.oneshot, self.expect = prim, 1, EXP_RESP
@@ -251,6 +430,8 @@ class Biu:
             return True
         if cir == CIR_OPERAND and not self._violates(cir, write) and not self.pv:
             if write and self.cu_dlg() and self.cu_cnt and not self.xfer:
+                return True
+            if not write and self._cu_read():
                 return True
             return self.opr_valid if not write else not self.opw_valid
         if cir == CIR_RESTORE and not write:
@@ -284,6 +465,8 @@ class Biu:
             rv = 0x0218 if self.xfer else (self.save if self.save_valid else 0x0118)
         elif cir == CIR_RESTORE and not write:
             rv = self.restore
+        elif cir == CIR_OPERAND and not write and self._cu_read():
+            rv = self.cu_d[3 - self.cu_cnt] if self.expect == EXP_OPR else 0xFFFFFFFF
         elif cir == CIR_OPERAND and not write:
             rv = self.opr if (self.expect == EXP_OPR and not self.pv) else 0xFFFFFFFF
         elif cir == CIR_REGSEL and not write:
@@ -302,7 +485,7 @@ class Biu:
                 self.expect = EXP_OPR if self.rsel_dir else EXP_OPW
             elif cir in (CIR_COMMAND, CIR_CONDITION) and write:
                 if self.model == 68882 and cir == CIR_COMMAND and self.apu_run \
-                        and not self.cu_v and not self.cmd_pend and cu_takes(value & 0xFFFF):
+                        and not self.cu_v and not self.cmd_pend and self._cu_takes(value & 0xFFFF):
                     self._cu_accept(value & 0xFFFF)
                 else:
                     self.cmd_pend, self.cmd_cond, self.cmd_word = 1, int(cir == CIR_CONDITION), value & 0xFFFF
@@ -312,6 +495,11 @@ class Biu:
                 if write and self.model == 68882 and self.cu_dlg() and self.cu_cnt \
                         and not self.xfer:
                     self._cu_operand(value & 0xFFFFFFFF)
+                elif not write and self._cu_read():
+                    self.cu_cnt -= 1
+                    if self.cu_cnt == 0:
+                        self.expect = EXP_CMD                  # CA = 0, no read
+                        self.cu_clear()
                 elif write:
                     self.opw_data, self.opw_valid = value & 0xFFFFFFFF, 1
                 else:
@@ -390,6 +578,11 @@ class Biu:
             # FPU 7.2.10: the PC is mandatory, and comes before anything else.
             self.pc_after, self.pc_cu = self.expect, int(cu)
             self.expect = EXP_PC
+
+    def _cu_read(self):
+        """An operand read of the CU's extended store (figure 7-21)."""
+        return self.model == 68882 and self.cu_xrd and self.cu_cnt and not self.xfer \
+            and not self.pv and self.expect == EXP_OPR
 
     def _cu_operand(self, v):
         k = fmt_longs(self.cu_word) - self.cu_cnt

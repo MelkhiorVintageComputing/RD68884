@@ -104,6 +104,12 @@ module biu_tb;
   logic        abort_ab, cu_ready, cu_valid, cu_mid;
   logic [15:0] cu_word;
   logic [31:0] cu_d0, cu_d1, cu_d2, cu_w0, cu_w1;
+  logic        prec_x = 1, dcc_ack = 0;
+  logic [90:0] rfb_q = 0;
+  logic        rfb_we, rfb_re, dcc_v, dcc_cc_v;
+  logic [2:0]  rfb_wa, rfb_ra;
+  logic [90:0] rfb_wd;
+  logic [3:0]  dcc_cc;
 
 `ifdef BIU_SYNC
   rd68884_biu #(.BUS_SYNC(1), .BUS_SYNC_WAIT(`BIU_SYNC_WAIT), .MODEL(`BIU_MODEL)) dut (
@@ -136,7 +142,10 @@ module biu_tb;
       .relatch_i(relatch), .relatch_word_i(relatch_word), .relatch_cond_i(relatch_cond),
       .abort_ab_o(abort_ab), .cu_ready_o(cu_ready), .cu_valid_o(cu_valid), .cu_mid_o(cu_mid),
       .cu_word_o(cu_word), .cu_d0_o(cu_d0), .cu_d1_o(cu_d1), .cu_d2_o(cu_d2),
-      .cu_w0_o(cu_w0), .cu_w1_o(cu_w1));
+      .cu_w0_o(cu_w0), .cu_w1_o(cu_w1),
+      .prec_x_i(prec_x), .rfb_q_i(rfb_q), .rfb_we_o(rfb_we), .rfb_wa_o(rfb_wa),
+      .rfb_wd_o(rfb_wd), .rfb_re_o(rfb_re), .rfb_ra_o(rfb_ra), .dcc_v_o(dcc_v),
+      .dcc_cc_v_o(dcc_cc_v), .dcc_cc_o(dcc_cc), .dcc_ack_i(dcc_ack));
 
   // ==========================================================================
   // Bookkeeping

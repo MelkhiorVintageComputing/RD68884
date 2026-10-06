@@ -99,6 +99,7 @@ Project documents:
 | `doc/system.md` | SunOS 4.1.1 in TME with RD68021 and RD68884 (`make sunos`) |
 | `doc/timing-divergences.md` | Clock counts against FPU section 8, and why each differs (`make cycles`) |
 | `doc/boards.md` | Boards: the IIsiA7 Mini for the Macintosh IIsi's PDS (`make board-iisia7`) |
+| `doc/rd68885.md` | RD68885, the MC68882 build (`MODEL=68882`): the conversion unit, its frames, its timing |
 
 ## Building and checking
 
@@ -126,6 +127,8 @@ make lint-quartus / make quartus / make lint-questa
 `make help` lists every target.
 
 The BIU's front end is a build choice (doc/bus-timing.md): `BUS_SYNC=0` (the default) takes the bus as asynchronous; `BUS_SYNC=1` runs the core on the main processor's CLK, with `BUS_SYNC_WAIT=0` or `1` wait states. `DSACK_NEGATE=1` drives DSACK negated before releasing it, as the MC68881 does. `lint`, `audit` and `sim` cover all four builds (the three, and the asynchronous one with `DSACK_NEGATE`); `sys`, `synth`, `impl`, `quartus`, `lint-quartus`, `tme` and `sunos` build the one named, for example `make sys BUS_SYNC=1`. `make cycles` measures both.
+
+`MODEL=68882` builds RD68885, the MC68882 (doc/rd68885.md); `MODEL=68881`, the default, is RD68884. `lint`, `audit` and `sim` cover both. `sys`, `cycles`, `synth`, `board-iisia7`, `tme` and `sunos` build the one named, for example `make sys MODEL=68882`.
 
 ## Tooling notes
 

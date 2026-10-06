@@ -87,7 +87,20 @@ module rd68884_seq #(
     output logic        cu_resume_o,
     output logic        relatch_o,
     output logic [15:0] relatch_word_o,
-    output logic        relatch_cond_o
+    output logic        relatch_cond_o,
+    // The conversion unit's port into the register file, and the FPSR
+    // effects of an FMOVE it completed (doc/rd68885.md, stage B).
+    input  logic        rfb_we_i,
+    input  logic [2:0]  rfb_wa_i,
+    input  logic [90:0] rfb_wd_i,
+    input  logic        rfb_re_i,
+    input  logic [2:0]  rfb_ra_i,
+    output logic [90:0] rfb_q_o,
+    output logic        prec_x_o,
+    input  logic        dcc_v_i,
+    input  logic        dcc_cc_v_i,
+    input  logic [3:0]  dcc_cc_i,
+    output logic        dcc_ack_o
 );
 
   // ==========================================================================
@@ -819,14 +832,18 @@ module rd68884_seq #(
   assign cr_re = ~trap & (f_rf == rd68884_ucode_pkg::RF_CROM);
 
   logic [90:0] rf_q;
-  rd68884_regfile u_rf (
+  rd68884_regfile #(.PORT_B(MODEL == 68882 ? 1 : 0)) u_rf (
       .clk(clk),
       .we (rf_we),
-      .wa (rf_addr),
-      .wd ({a_sign, a_exp, a_mant}),
       .re (rf_re),
-      .ra (rf_addr),
-      .q  (rf_q)
+      .a  (rf_addr),
+      .wd ({a_sign, a_exp, a_mant}),
+      .q  (rf_q),
+      .web(rfb_we_i),
+      .reb(rfb_re_i),
+      .ab ({4'd0, rfb_we_i ? rfb_wa_i : rfb_ra_i}),   // never both in a clock
+      .wdb(rfb_wd_i),
+      .qb (rfb_q_o)
   );
 
   // The constant ROM, at IMM + an offset (tools/ucode/fields.py, RF CROM).
@@ -904,6 +921,8 @@ module rd68884_seq #(
     cu_load_o      = ~trap & (f_tdst == rd68884_ucode_pkg::TDST_CU);
     cu_idx_o       = f_imm[2:0];
     cu_data_o      = tbus;
+    prec_x_o       = (fpcr[7:6] == 2'b00) | (fpcr[7:6] == 2'b11);
+    dcc_ack_o      = ~trap & dcc_v_i & ~run;
   end
 
   // ==========================================================================
@@ -1156,6 +1175,13 @@ module rd68884_seq #(
     fpsr_nxt[15:8] = fpsr_nxt[15:8] | f_excset;
     if (f_flag == rd68884_ucode_pkg::FLAG_BSUN)  fpsr_nxt = fpsr_nxt | 32'h0000_8080;
     if (f_flag == rd68884_ucode_pkg::FLAG_RESET) fpsr_nxt = 32'd0;
+    // RD68885: an FMOVE the CU completed while the APU computed lands once
+    // no released instruction computes, in program order: its exception
+    // byte cleared, its condition codes (tools/iss/core.py).
+    if (dcc_v_i && !run) begin
+      fpsr_nxt[15:8] = 8'd0;
+      if (dcc_cc_v_i) fpsr_nxt[27:24] = dcc_cc_i;
+    end
   end
 
   // ==========================================================================

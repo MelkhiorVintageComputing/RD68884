@@ -729,10 +729,16 @@ def emit(p):
     u(ASRC='RFQ', SEQ='JUMP', TGT='o_p_go')
 
     # ---- extended: exact, a denormal signals UNFL --------------------------
+    # The MC68882 (FPU 7.5.1.3, figure 7-21): a normal, zero or infinite
+    # source goes out with CA = 0 (out_x0); a NaN, unnormal or denormal one
+    # with figure 7-20's dialog, as on the MC68881.
+    pk0 = 'ox_pack0' if p.model == 68882 else 'ox_pack'
     L('o_x_go')
     u(SEQ='BR', COND='A_NAN', TGT='ox_nan')
     u(SEQ='BR', COND='A_INF', TGT='ox_inf')
     u(SEQ='BR', COND='A_ZERO', TGT='ox_zero')
+    if p.model == 68882:
+        u(SEQ='BR', COND='A_J', TGT='ox_pack0')
     u(MOP='NORM')
     u(SEQ='BR', NEG=1, COND='AE_LT_XMIN', TGT='ox_pack')
     u(EXCSET=UNFL, EOP='SA_IA', IMM=-16383 & 0xFFFF)
@@ -743,9 +749,12 @@ def emit(p):
     u(SEQ='BR', NEG=1, COND='A_SNAN', TGT='ox_pack')
     u(EXCSET=SNAN, MOP='QUIET', SEQ='JUMP', TGT='ox_pack')
     L('ox_inf')
-    u(MOP='INFA', SEQ='JUMP', TGT='ox_pack')
+    u(MOP='INFA', SEQ='JUMP', TGT=pk0)
     L('ox_zero')
-    u(MOP='ZEROM', SEQ='JUMP', TGT='ox_pack')
+    u(MOP='ZEROM', SEQ='JUMP', TGT=pk0)
+    if p.model == 68882:
+        L('ox_pack0')
+        u(XOP='PACKX', SEQ='JUMP', TGT='out_x0')
 
     # ---- single and double: the format's precision and range ----------------
     for fmt, xop, out in (('s', 'PACKS', 'out_1'), ('d', 'PACKD', 'out_d')):
@@ -816,6 +825,32 @@ def emit(p):
     for k in (1, 2):
         u(TSRC=f'XI{k}', BIU='OPR_WR')
         bwait(p, 'OPR_VALID', True, opr_replay(f'XI{k}'))
+    if p.model == 68882:
+        u(SEQ='JUMP', TGT='out_end', comment="out_x's end; out_x0 is not its continuation")
+        # Figure 7-21: CA = 0. The BIU expects a command after the third long
+        # word is read (XFER); the main processor reads no response, and
+        # there is no exception to report.
+        L('out_x0')
+        u(RESP='WR', IMM=0x320C, ONESHOT=1, EXPECT='OPR', XFER=3, TSRC='XI0', BIU='OPR_WR')
+
+        def replay0(w):
+            r = w + '_r'
+            u(SEQ='BR', COND='RESP_READ', TGT=r)
+            u(RESP='WR', IMM=0x320C, ONESHOT=1, EXPECT='OPR', XFER=3, TSRC='XI0',
+              BIU='OPR_WR', SEQ='JUMP', TGT=w, comment='not read yet: the primitive again')
+            L(r)
+            u(RESP='WR', IMM=0x8900, EXPECT='OPR', XFER=3, TSRC='XI0', BIU='OPR_WR',
+              SEQ='JUMP', TGT=w)
+        bwait(p, 'OPR_VALID', True, replay0)
+        for k in (1, 2):
+            u(TSRC=f'XI{k}', BIU='OPR_WR')
+            bwait(p, 'OPR_VALID', True,
+                  [dict(RESP='WR', IMM=0x8900, EXPECT='OPR', XFER=3 - k),
+                   dict(TSRC=f'XI{k}', BIU='OPR_WR')])
+        u(FPSR='ACCRUE')
+        u(RESP='WRC', IMM=0x0802, EXPECT='CMD', SEQ='JUMP', TGT='idle',
+          comment='released already; not over a command latched since')
+
     # FPU 7.5.4.2: an enabled exception is reported here, mid-instruction.
     L('out_end')
     u(FPSR='ACCRUE')

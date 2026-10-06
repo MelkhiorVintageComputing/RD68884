@@ -79,6 +79,10 @@ module rd68884_top #(
   logic [31:0] cu_d0, cu_d1, cu_d2, cu_w0, cu_w1, cu_data;
   logic [2:0]  cu_idx;
   logic [1:0]  resp_xfer;
+  logic        prec_x, rfb_we, rfb_re, dcc_v, dcc_cc_v, dcc_ack;
+  logic [2:0]  rfb_wa, rfb_ra;
+  logic [90:0] rfb_wd, rfb_q;
+  logic [3:0]  dcc_cc;
 
   rd68884_biu #(
       .BUS_SYNC     (BUS_SYNC),
@@ -158,7 +162,18 @@ module rd68884_top #(
       .cu_d1_o       (cu_d1),
       .cu_d2_o       (cu_d2),
       .cu_w0_o       (cu_w0),
-      .cu_w1_o       (cu_w1)
+      .cu_w1_o       (cu_w1),
+      .prec_x_i      (prec_x),
+      .rfb_q_i       (rfb_q),
+      .rfb_we_o      (rfb_we),
+      .rfb_wa_o      (rfb_wa),
+      .rfb_wd_o      (rfb_wd),
+      .rfb_re_o      (rfb_re),
+      .rfb_ra_o      (rfb_ra),
+      .dcc_v_o       (dcc_v),
+      .dcc_cc_v_o    (dcc_cc_v),
+      .dcc_cc_o      (dcc_cc),
+      .dcc_ack_i     (dcc_ack)
   );
 
   rd68884_seq #(
@@ -223,7 +238,18 @@ module rd68884_top #(
       .cu_resume_o   (cu_resume),
       .relatch_o     (relatch),
       .relatch_word_o(relatch_word),
-      .relatch_cond_o(relatch_cond)
+      .relatch_cond_o(relatch_cond),
+      .rfb_we_i      (rfb_we),
+      .rfb_wa_i      (rfb_wa),
+      .rfb_wd_i      (rfb_wd),
+      .rfb_re_i      (rfb_re),
+      .rfb_ra_i      (rfb_ra),
+      .rfb_q_o       (rfb_q),
+      .prec_x_o      (prec_x),
+      .dcc_v_i       (dcc_v),
+      .dcc_cc_v_i    (dcc_cc_v),
+      .dcc_cc_i      (dcc_cc),
+      .dcc_ack_o     (dcc_ack)
   );
 
 endmodule

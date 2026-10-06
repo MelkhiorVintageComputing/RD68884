@@ -5,19 +5,21 @@
 # RD68884 on the IIsiA7 Mini: bitstream and flash image (doc/boards.md).
 #
 #   vivado -mode batch -source boards/iisia7_mini/build.tcl -tclargs \
-#          <repo-root> <part> <clkout0-divide>
+#          <repo-root> <part> <clkout0-divide> [<model>]
 #
 # Run from the build directory, which holds rtl.f (the RTL, absolute paths) and
-# pins.xdc (tools/board_pins.py). Writes rd68884_iisia7.bit, .bin and .mcs, and
-# the reports; exits non-zero if timing is not met or DRC finds an error.
+# pins.xdc (tools/board_pins.py). Writes rd68884_iisia7.bit, .bin and .mcs (or
+# rd68885_iisia7.* with model 68882, doc/rd68885.md), and the reports; exits
+# non-zero if timing is not met or DRC finds an error.
 
 set root   [lindex $argv 0]
 set part   [lindex $argv 1]
 set divide [lindex $argv 2]
+set model  [expr {[llength $argv] > 3 ? [lindex $argv 3] : 68881}]
 set top    rd68884_iisia7_top
-set name   rd68884_iisia7
+set name   [expr {$model == 68882 ? "rd68885_iisia7" : "rd68884_iisia7"}]
 
-puts "RD68884: IIsiA7 Mini, $part, core clock 1000 MHz / $divide"
+puts "RD68884: IIsiA7 Mini, $part, core clock 1000 MHz / $divide, MC$model"
 
 set_msg_config -id {Synth 8-6901} -new_severity ERROR
 
@@ -29,7 +31,7 @@ read_verilog -sv $root/boards/iisia7_mini/rd68884_iisia7_top.sv
 read_xdc pins.xdc
 read_xdc $root/boards/iisia7_mini/timing.xdc
 
-synth_design -top $top -part $part -generic CLKOUT0_DIVIDE=$divide
+synth_design -top $top -part $part -generic CLKOUT0_DIVIDE=$divide -generic MODEL=$model
 opt_design
 place_design
 phys_opt_design

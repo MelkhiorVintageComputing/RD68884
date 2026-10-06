@@ -376,7 +376,7 @@ package rd68884_ucode_pkg;
   // The MC68882 program (RD68885)
   localparam logic [11:0] ENTRY82_RESET = 12'd0;
   localparam logic [11:0] ENTRY82_ABORT = 12'd7;
-  localparam logic [11:0] ENTRY82_RESTORE = 12'd2741;
+  localparam logic [11:0] ENTRY82_RESTORE = 12'd2767;
   localparam logic [11:0] ENTRY82_ILLEGAL = 12'd6;
   localparam logic [11:0] ENTRY82_ABORT_AB = 12'd8;
 

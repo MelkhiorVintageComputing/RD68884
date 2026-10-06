@@ -218,7 +218,21 @@ module rd68884_biu #(
     output logic [31:0] cu_d1_o,
     output logic [31:0] cu_d2_o,
     output logic [31:0] cu_w0_o,         // the frame's first two CU long words
-    output logic [31:0] cu_w1_o
+    output logic [31:0] cu_w1_o,
+    // Stage B (FPU table 5-5): FMOVEs the CU completes itself, through the
+    // register file's second port; their FPSR effects wait for the APU's
+    // instruction to end (dcc, applied by the sequencer: dcc_ack).
+    input  logic        prec_x_i,        // FPCR's rounding precision is extended
+    input  logic [90:0] rfb_q_i,
+    output logic        rfb_we_o,
+    output logic [2:0]  rfb_wa_o,
+    output logic [90:0] rfb_wd_o,
+    output logic        rfb_re_o,
+    output logic [2:0]  rfb_ra_o,
+    output logic        dcc_v_o,
+    output logic        dcc_cc_v_o,
+    output logic [3:0]  dcc_cc_o,
+    input  logic        dcc_ack_i
 );
 
   // ==========================================================================
@@ -495,6 +509,12 @@ module rd68884_biu #(
   logic [1:0]  resp_xfer_q;      // with the response: the transfer's length
   logic [2:0]  pc_after_q;       // what is expected once the PC is written
   logic        pc_cu_q;          // the PC is the CU's instruction's
+  logic        cu_nofm_q;        // stage B: the APU's path chosen instead
+  logic        cu_rd_q;          // ... FPm read through port B
+  logic        cu_xrd_q;         // ... an extended store's operand going out
+  logic [15:0] apu_word_q;       // the APU's instruction
+  logic        dcc_v_q, dcc_cc_v_q;
+  logic [3:0]  dcc_cc_q;
   logic [5:0]  resp_wait_q;      // clocks the current response read has waited
   logic        hold_save_q;      // ... the save read it was a format word
 
@@ -509,6 +529,20 @@ module rd68884_biu #(
   assign restore_word_o = restore_word_q;
   assign fpiar_o        = fpiar_q;
   assign pv_o           = pv_q;
+
+  // RD68885 (doc/rd68885.md, and the conversion unit below).
+  localparam bit IS82 = (MODEL == 68882);
+  logic cu_dlg;                  // the CU's dialog is not over
+  assign cu_dlg = cu_v_q & ~cu_rel_q;
+  // An operand long word for the CU: in its dialog, outside a frame.
+  logic cu_route;
+  assign cu_route = IS82 & cu_dlg & (cu_cnt_q != 2'd0) & (xfer_q == 6'd0);
+  // An operand read of the CU's extended store (figure 7-21).
+  logic cu_rdx;
+  assign cu_rdx = IS82 & cu_xrd_q & (cu_cnt_q != 2'd0) & (xfer_q == 6'd0) & ~pv_q &
+                  (expect_q == rd68884_pkg::EXP_OPR);
+  logic [31:0] cu_xword;
+  assign cu_xword = (cu_cnt_q == 2'd3) ? cu_d0_q : (cu_cnt_q == 2'd2) ? cu_d1_q : cu_d2_q;
 
   // What a read returns, by register, before any snapshot.
   logic [31:0] rd_word;
@@ -527,20 +561,13 @@ module rd68884_biu #(
       // An operand read the dialog does not expect is a protocol violation
       // and gets all ones, as tools/model/cpif.py (FPU 6.1.12 only says the
       // data is inconsistent).
-      rd_word = (expect_q == rd68884_pkg::EXP_OPR && !pv_q) ? opr_q : 32'hFFFF_FFFF;
+      rd_word = cu_rdx ? cu_xword :
+                (expect_q == rd68884_pkg::EXP_OPR && !pv_q) ? opr_q : 32'hFFFF_FFFF;
     end else if (is_rsel) begin
       // FPU 7.2.9: the low byte reads as zeros; 10.1.1: bits 15-0 driven high.
       rd_word = {rsel_q, 8'h00, 16'hFFFF};
     end
   end
-
-  // RD68885 (doc/rd68885.md, and the conversion unit below).
-  localparam bit IS82 = (MODEL == 68882);
-  logic cu_dlg;                  // the CU's dialog is not over
-  assign cu_dlg = cu_v_q & ~cu_rel_q;
-  // An operand long word for the CU: in its dialog, outside a frame.
-  logic cu_route;
-  assign cu_route = IS82 & cu_dlg & (cu_cnt_q != 2'd0) & (xfer_q == 6'd0);
 
   // The protocol-violation rules of FPU 6.1.12, for the MC68881, against the
   // current expectation. Only accesses that touch a checked register count.
@@ -585,7 +612,7 @@ module rd68884_biu #(
       if (is_resp && rd_d && first_part) begin
         ready = ~resp_hold;
       end else if (is_oper && rd_d) begin
-        ready = opr_valid_q;                  // every part reads opr_q
+        ready = opr_valid_q | cu_rdx;         // every part reads opr_q (or the CU's)
       end else if (is_oper && !rd_d && last_part) begin
         ready = ~opw_valid_q | cu_route;      // the CU's buffer is always free
       end else if (is_rest && rd_d) begin
@@ -674,8 +701,6 @@ module rd68884_biu #(
   assign cu_total = (cu_word_q[12:10] == 3'd5) ? 2'd2 : (cu_word_q[12:10] == 3'd2) ? 2'd3 : 2'd1;
   assign cu_k     = cu_total - cu_cnt_q;
 
-  assign cu_ready_o = cu_v_q & (cu_cnt_q == 2'd0) & (cu_rel_q | cu_bwl_q) &
-                      ~((expect_q == rd68884_pkg::EXP_PC) & pc_cu_q);
   assign cu_valid_o = cu_v_q;
   assign cu_mid_o   = cu_dlg;
   assign cu_word_o  = cu_word_q;
@@ -686,6 +711,139 @@ module rd68884_biu #(
   assign cu_w0_o = cu_v_q ? {cu_word_q, 1'b0, cu_rel_q, cu_pcv_q, 5'b11111, 6'd0, cu_cnt_q}
                           : 32'hFFFF_FFFF;
   assign cu_w1_o = (cu_v_q & cu_pcv_q) ? cu_pc_q : 32'hFFFF_FFFF;
+
+  // ---- Stage B: the fully concurrent FMOVEs (FPU table 5-5) --------------
+  // FMOVE <ea>,FPn from S, D or X; FMOVE FPm,FPn; FMOVE.X FPm,<ea>. While
+  // the APU computes, with extended rounding precision (c), no register
+  // conflict with the APU's destination (a, f), and -- the model's choice
+  // (doc/model.md) -- no exception enabled, the CU completes them itself if
+  // the value is normal, zero or infinite (b). tools/iss/biu.py
+  // (_fm_decide) is the definition.
+  logic fm_in, fm_rr, fm_xout;
+  assign fm_in   = (cu_word_q[15:13] == 3'd2) & ((cu_word_q[12:10] == 3'd1) |
+                   (cu_word_q[12:10] == 3'd5) | (cu_word_q[12:10] == 3'd2)) &
+                   (cu_word_q[6:0] == 7'd0);
+  assign fm_rr   = (cu_word_q[15:13] == 3'd0) & (cu_word_q[6:0] == 7'd0);
+  assign fm_xout = (cu_word_q[15:13] == 3'd3) & (cu_word_q[12:10] == 3'd2);
+
+  // The APU's instruction's destinations: FPn, and FSINCOS's FPc.
+  logic       apu_dv, apu_sc;
+  logic       unused_apu_src;    // its source field: no conflict with its source
+  assign unused_apu_src = &{1'b0, apu_word_q[12:10]};
+  assign apu_dv = (apu_word_q[15:13] == 3'd0) | (apu_word_q[15:13] == 3'd2);
+  assign apu_sc = (apu_word_q[6:3] == 4'b0110);
+  logic conf_n, conf_m, conf_acc, conf_grab;
+  assign conf_n    = apu_dv & ((cu_word_q[9:7] == apu_word_q[9:7]) |
+                               (apu_sc & (cu_word_q[9:7] == apu_word_q[2:0])));
+  assign conf_m    = apu_dv & ((cu_word_q[12:10] == apu_word_q[9:7]) |
+                               (apu_sc & (cu_word_q[12:10] == apu_word_q[2:0])));
+  assign conf_acc  = apu_dv & ((wmerged[25:23] == apu_word_q[9:7]) |
+                               (apu_sc & (wmerged[25:23] == apu_word_q[2:0])));
+  assign conf_grab = apu_dv & ((cmd_word_q[9:7] == apu_word_q[9:7]) |
+                               (apu_sc & (cmd_word_q[9:7] == apu_word_q[2:0])));
+
+  logic fm_conds;
+  assign fm_conds = apu_run_i & ~pcen_i & (prec_x_i | fm_xout) & ~conf_n & ~(fm_rr & conf_m);
+  logic fm_base;
+  assign fm_base = IS82 & cu_v_q & (fm_in | fm_rr | fm_xout) & ~cu_nofm_q &
+                   (cu_cnt_q == 2'd0) & ~cu_xrd_q &
+                   ~((expect_q == rd68884_pkg::EXP_PC) & pc_cu_q) &
+                   (cu_rel_q | fm_xout);
+  logic fm_hide;                 // CU_READY: not while the CU will complete it
+  assign fm_hide = (fm_in | fm_rr) & ~cu_nofm_q & fm_conds;
+  assign cu_ready_o = cu_v_q & (cu_cnt_q == 2'd0) & (cu_rel_q | cu_bwl_q) &
+                      ~((expect_q == rd68884_pkg::EXP_PC) & pc_cu_q) & ~fm_hide;
+
+  // The S, D or X operand in the register file's form, if eligible.
+  logic        in_ok, in_s;
+  logic [17:0] in_e;
+  logic [71:0] in_m;
+  always_comb begin
+    in_s = cu_d0_q[31];
+    in_ok = 1'b0;
+    in_e = 18'h3C001;                         // -16383: zero
+    in_m = 72'd0;
+    case (cu_word_q[12:10])
+      3'd2: begin                             // X
+        if (cu_d0_q[30:16] == 15'h7FFF) begin
+          in_ok = (cu_d1_q[30:0] == 31'd0) & (cu_d2_q == 32'd0);
+          in_e  = 18'd16384;
+        end else if (cu_d0_q[30:16] == 15'd0) begin
+          in_ok = (cu_d1_q == 32'd0) & (cu_d2_q == 32'd0);
+        end else begin
+          in_ok = cu_d1_q[31];
+          in_e  = {3'd0, cu_d0_q[30:16]} - 18'd16383;
+          in_m  = {cu_d1_q, cu_d2_q, 8'd0};
+        end
+      end
+      3'd1: begin                             // S
+        if (cu_d0_q[30:23] == 8'hFF) begin
+          in_ok = (cu_d0_q[22:0] == 23'd0);
+          in_e  = 18'd16384;
+        end else if (cu_d0_q[30:23] == 8'd0) begin
+          in_ok = (cu_d0_q[22:0] == 23'd0);
+        end else begin
+          in_ok = 1'b1;
+          in_e  = {10'd0, cu_d0_q[30:23]} - 18'd127;
+          in_m  = {1'b1, cu_d0_q[22:0], 48'd0};
+        end
+      end
+      default: begin                          // D
+        if (cu_d0_q[30:20] == 11'h7FF) begin
+          in_ok = (cu_d0_q[19:0] == 20'd0) & (cu_d1_q == 32'd0);
+          in_e  = 18'd16384;
+        end else if (cu_d0_q[30:20] == 11'd0) begin
+          in_ok = (cu_d0_q[19:0] == 20'd0) & (cu_d1_q == 32'd0);
+        end else begin
+          in_ok = 1'b1;
+          in_e  = {7'd0, cu_d0_q[30:20]} - 18'd1023;
+          in_m  = {1'b1, cu_d0_q[19:0], cu_d1_q, 19'd0};
+        end
+      end
+    endcase
+  end
+  logic [3:0] in_cc;
+  assign in_cc = {in_s, (in_e != 18'd16384) & (in_m == 72'd0), (in_e == 18'd16384), 1'b0};
+
+  // FPm, read through port B: eligible, its condition codes, its X image.
+  logic        q_s, q_spec, q_ok;
+  logic [17:0] q_e;
+  logic [71:0] q_m;
+  assign q_s    = rfb_q_i[90];
+  assign q_e    = rfb_q_i[89:72];
+  assign q_m    = rfb_q_i[71:0];
+  assign q_spec = (q_e == 18'd16384);
+  assign q_ok   = q_spec ? (q_m == 72'd0) :
+                  (q_m == 72'd0) ? (q_e == 18'h3C001) : q_m[71];
+  logic [3:0]  q_cc;
+  assign q_cc = {q_s, ~q_spec & (q_m == 72'd0), q_spec, 1'b0};
+  logic [14:0] q_xe;
+  assign q_xe = q_e[14:0] + 15'd16383;
+
+  // This clock's step.
+  logic d_in, d_rd, d_rr, d_x, d_nofm, d_relatch, d_done;
+  assign d_in      = fm_base & fm_in & fm_conds;
+  assign d_rd      = fm_base & (fm_rr | fm_xout) & fm_conds & ~cu_rd_q;
+  assign d_rr      = fm_base & fm_rr & fm_conds & cu_rd_q;
+  assign d_x       = fm_base & fm_xout & fm_conds & cu_rd_q & q_ok;
+  assign d_nofm    = (d_in & ~in_ok) | (d_rr & ~q_ok);
+  assign d_relatch = fm_base & fm_xout & (~fm_conds | (cu_rd_q & ~q_ok));
+  assign d_done    = (d_in & in_ok) | (d_rr & q_ok);
+  assign rfb_we_o  = d_done;
+  assign rfb_wa_o  = cu_word_q[9:7];
+  assign rfb_wd_o  = fm_in ? {in_s, in_e, in_m} : rfb_q_i;
+  assign rfb_re_o  = d_rd;
+  assign rfb_ra_o  = fm_rr ? cu_word_q[12:10] : cu_word_q[9:7];
+  assign dcc_v_o    = dcc_v_q;
+  assign dcc_cc_v_o = dcc_cc_v_q;
+  assign dcc_cc_o   = dcc_cc_q;
+
+  // An extended store the CU takes: only when it will complete it.
+  logic acc_xout, grab_xout;
+  assign acc_xout  = (wmerged[31:29] == 3'd3) & (wmerged[28:26] == 3'd2) &
+                     ~pcen_i & ~conf_acc;
+  assign grab_xout = (cmd_word_q[15:13] == 3'd3) & (cmd_word_q[12:10] == 3'd2) &
+                     ~pcen_i & ~conf_grab;
 
   // Events of the completing access.
   logic ev_resp, ev_rsel, ev_save, ev_save_again, ev_abort, ev_cmd, ev_opw;
@@ -762,9 +920,12 @@ module rd68884_biu #(
 
   // The CU takes a command: written now, or latched before it was free.
   logic cu_acc, cu_grab;
-  assign cu_acc  = IS82 & ev_cmd & is_cmd & apu_run_i & ~cu_v_q & ~cmd_pend_q & acc_takes;
+  assign cu_acc  = IS82 & ev_cmd & is_cmd & apu_run_i & ~cu_v_q & ~cmd_pend_q &
+                   (acc_takes | acc_xout);
   assign cu_grab = IS82 & cmd_pend_q & ~cmd_cond_q & ~cu_v_q & apu_run_i & ~cmd_ack_i &
-                   ~pv_q & grab_takes & ~ev_ab;
+                   ~pv_q & (grab_takes | grab_xout) & ~ev_ab;
+  logic cu_x;                    // ... an extended store: null (CA=1) first, figure 7-21
+  assign cu_x = cu_acc ? acc_xout & ~acc_takes : grab_xout & ~grab_takes;
   logic cu_opw;
   assign cu_opw  = ev_opw & cu_route;
 
@@ -829,6 +990,13 @@ module rd68884_biu #(
       fpiar_q         <= 32'd0;
       cu_v_q          <= 1'b0;
       cu_rel_q        <= 1'b0;
+      cu_nofm_q       <= 1'b0;
+      cu_rd_q         <= 1'b0;
+      cu_xrd_q        <= 1'b0;
+      apu_word_q      <= 16'hE000;
+      dcc_v_q         <= 1'b0;
+      dcc_cc_v_q      <= 1'b0;
+      dcc_cc_q        <= 4'd0;
       cu_pcv_q        <= 1'b0;
       cu_bwl_q        <= 1'b0;
       cu_word_q       <= 16'd0;
@@ -975,6 +1143,9 @@ module rd68884_biu #(
         end
         cu_v_q   <= 1'b0;
         cu_rel_q <= 1'b0;
+        cu_nofm_q <= 1'b0;
+        cu_rd_q   <= 1'b0;
+        cu_xrd_q  <= 1'b0;
         cu_pcv_q <= 1'b0;
         cu_bwl_q <= 1'b0;
         cu_cnt_q <= 2'd0;
@@ -992,6 +1163,10 @@ module rd68884_biu #(
             cu_rel_q  <= ~cu_data_i[15] & cu_data_i[14];
             cu_pcv_q  <= ~cu_data_i[15] & cu_data_i[13];
             cu_cnt_q  <= cu_data_i[15] ? 2'd0 : cu_data_i[1:0];
+            cu_nofm_q <= 1'b0;
+            cu_rd_q   <= 1'b0;
+            cu_xrd_q  <= ~cu_data_i[15] & (cu_data_i[31:29] == 3'd3) &
+                         (cu_data_i[28:26] == 3'd2) & (cu_data_i[1:0] != 2'd0);
             cu_bwl_q  <= ~cu_data_i[15] & (cu_data_i[31:29] == 3'd2) &
                          ((cu_data_i[28:26] == 3'd0) | (cu_data_i[28:26] == 3'd4) |
                           (cu_data_i[28:26] == 3'd6));
@@ -1015,7 +1190,7 @@ module rd68884_biu #(
         oneshot_q    <= 1'b0;
         if (cu_cnt_q != 2'd0) begin
           resp_q   <= cu_bwl_q ? rd68884_pkg::PRIM_NULL_WAIT : rd68884_pkg::PRIM_NULL_REL;
-          expect_q <= rd68884_pkg::EXP_OPW;
+          expect_q <= cu_xrd_q ? rd68884_pkg::EXP_OPR : rd68884_pkg::EXP_OPW;
           oplen_q  <= (cu_word_q[12:10] == 3'd6) ? 2'd1 :
                       (cu_word_q[12:10] == 3'd4) ? 2'd2 : 2'd0;
         end else begin
@@ -1062,14 +1237,17 @@ module rd68884_biu #(
         cu_rel_q      <= 1'b0;
         cu_pcv_q      <= 1'b0;
         cu_word_q     <= cu_acc ? wmerged[31:16] : cmd_word_q;
-        cu_cnt_q      <= cu_acc ? acc_n : grab_n;
-        cu_bwl_q      <= cu_acc ? acc_bwl : grab_bwl;
+        cu_cnt_q      <= cu_x ? 2'd0 : cu_acc ? acc_n : grab_n;
+        cu_bwl_q      <= ~cu_x & (cu_acc ? acc_bwl : grab_bwl);
+        cu_nofm_q     <= 1'b0;
+        cu_rd_q       <= 1'b0;
+        cu_xrd_q      <= 1'b0;
         cu_pc_q       <= 32'hFFFF_FFFF;
         cu_d0_q       <= 32'hFFFF_FFFF;
         cu_d1_q       <= 32'hFFFF_FFFF;
         cu_d2_q       <= 32'hFFFF_FFFF;
-        resp_q        <= cu_acc ? acc_prim : grab_prim;
-        oneshot_q     <= 1'b1;
+        resp_q        <= cu_x ? rd68884_pkg::PRIM_NULL_WAIT : cu_acc ? acc_prim : grab_prim;
+        oneshot_q     <= ~cu_x;
         resp_dirty_q  <= 1'b1;
         resp_fresh_q  <= 1'b0;
         resp_xfer_q   <= 2'd0;
@@ -1117,8 +1295,27 @@ module rd68884_biu #(
           if (ca0_q == 2'd1) expect_q <= rd68884_pkg::EXP_CMD;
         end
       end
-      if (ev_opr) begin
+      if (ev_opr && cu_rdx) begin
+        // The CU's extended store (figure 7-21): its three long words, then
+        // a command expected (CA = 0), the CU free.
+        cu_cnt_q <= cu_cnt_q - 2'd1;
+        if (cu_cnt_q == 2'd1) begin
+          expect_q  <= rd68884_pkg::EXP_CMD;
+          cu_v_q    <= 1'b0;
+          cu_xrd_q  <= 1'b0;
+          cu_rd_q   <= 1'b0;
+          cu_pc_q   <= 32'hFFFF_FFFF;
+          cu_d0_q   <= 32'hFFFF_FFFF;
+          cu_d1_q   <= 32'hFFFF_FFFF;
+          cu_d2_q   <= 32'hFFFF_FFFF;
+        end
+      end else if (ev_opr) begin
         opr_valid_q <= 1'b0;
+        // FPU 7.5.1.3, figure 7-21: an extended store with CA = 0.
+        if (IS82 && xfer_q == 6'd0 && ca0_q != 2'd0) begin
+          ca0_q <= ca0_q - 2'd1;
+          if (ca0_q == 2'd1) expect_q <= rd68884_pkg::EXP_CMD;
+        end
       end
       if (ev_rsel) begin
         expect_q <= rsel_dir_q ? rd68884_pkg::EXP_OPR : rd68884_pkg::EXP_OPW;
@@ -1191,6 +1388,59 @@ module rd68884_biu #(
           expect_q  <= rd68884_pkg::EXP_CMD;
         end
       end
+      // ---- stage B -------------------------------------------------------
+      if (cmd_ack_i) apu_word_q <= cmd_word_q;
+      if (cu_take_i) apu_word_q <= cu_word_q;
+      if (dcc_ack_i) begin
+        dcc_v_q    <= 1'b0;
+        dcc_cc_v_q <= 1'b0;
+      end
+      if (d_rd)   cu_rd_q   <= 1'b1;
+      if (d_nofm) cu_nofm_q <= 1'b1;
+      if (d_done | d_x) begin
+        // FPSR in program order: the condition codes (an extended store
+        // has none) and the cleared exception byte, deferred.
+        dcc_v_q <= 1'b1;
+        if (d_done) begin
+          dcc_cc_v_q <= 1'b1;
+          dcc_cc_q   <= fm_in ? in_cc : q_cc;
+        end
+      end
+      if (d_done | d_relatch) begin
+        cu_v_q    <= 1'b0;
+        cu_rel_q  <= 1'b0;
+        cu_pcv_q  <= 1'b0;
+        cu_bwl_q  <= 1'b0;
+        cu_cnt_q  <= 2'd0;
+        cu_nofm_q <= 1'b0;
+        cu_rd_q   <= 1'b0;
+        cu_xrd_q  <= 1'b0;
+        cu_pc_q   <= 32'hFFFF_FFFF;
+        cu_d0_q   <= 32'hFFFF_FFFF;
+        cu_d1_q   <= 32'hFFFF_FFFF;
+        cu_d2_q   <= 32'hFFFF_FFFF;
+      end
+      if (d_relatch) begin
+        // Back to the sequencer, as a latched command (the main processor
+        // polls $8900 still).
+        cmd_pend_q   <= 1'b1;
+        cmd_word_q   <= cu_word_q;
+        cmd_cond_q   <= 1'b0;
+        resp_fresh_q <= 1'b0;
+      end
+      if (d_x) begin
+        // Figure 7-21: evaluate <ea> and transfer data, CA = 0.
+        cu_d0_q       <= {q_s, q_xe, 16'd0};
+        cu_d1_q       <= q_m[71:40];
+        cu_d2_q       <= q_m[39:8];
+        cu_cnt_q      <= 2'd3;
+        cu_xrd_q      <= 1'b1;
+        resp_q        <= 16'h320C;
+        oneshot_q     <= 1'b1;
+        resp_dirty_q  <= 1'b1;
+        expect_q      <= rd68884_pkg::EXP_RESP;
+        expect_next_q <= rd68884_pkg::EXP_OPR;
+      end
       if (ev_ab) begin
         // FPU 7.2.2, the MC68882's AB: the last instruction received ends,
         // the APU's goes on, a pending exception stays.
@@ -1199,6 +1449,9 @@ module rd68884_biu #(
         end else if (cu_dlg) begin
           cu_v_q   <= 1'b0;
           cu_rel_q <= 1'b0;
+          cu_nofm_q <= 1'b0;
+          cu_rd_q   <= 1'b0;
+          cu_xrd_q  <= 1'b0;
           cu_pcv_q <= 1'b0;
           cu_bwl_q <= 1'b0;
           cu_cnt_q <= 2'd0;
@@ -1250,6 +1503,9 @@ module rd68884_biu #(
         ca0_q           <= 2'd0;
         cu_v_q          <= 1'b0;
         cu_rel_q        <= 1'b0;
+        cu_nofm_q       <= 1'b0;
+        cu_rd_q         <= 1'b0;
+        cu_xrd_q        <= 1'b0;
         cu_pcv_q        <= 1'b0;
         cu_bwl_q        <= 1'b0;
         cu_cnt_q        <= 2'd0;

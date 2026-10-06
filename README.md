@@ -15,6 +15,13 @@ Every instruction of the MC68881 is implemented and every coprocessor dialog wor
 
 **It runs SunOS 4.1.1.** In TME, with RD68021 as the CPU, a C program compiled with `cc -f68881` on the machine gives exactly the console of TME's own MC68881 (`doc/system.md`).
 
+**RD68885, the MC68882 build** (`MODEL=68882`, [`doc/rd68885.md`](doc/rd68885.md)), is on the `rd68885` branch. It identifies itself as an MC68882 and has its instruction overlap:
+- a conversion unit takes the next instruction while the APU computes;
+- some FMOVEs complete in it entirely (FPU table 5-5);
+- the MC68882's frames, exception rules and dialogs.
+
+It passes every test the MC68881 build passes. SunOS 4.1.1 runs in TME with it, against TME's own MC68882. On the IIsiA7 Mini it meets timing at 71.43 MHz in 17.4% of the slices. The test in a Macintosh is still to come.
+
 **What it implements:**
 - **The bus:**
   - the MC68881's asynchronous bus on 8-, 16- and 32-bit ports, with dynamic DSACK sizing;
@@ -83,6 +90,7 @@ At 50 MHz it runs alongside a 16.67–33 MHz bus. A slower core only adds wait s
 | [`doc/timing-divergences.md`](doc/timing-divergences.md) | Clock counts |
 | [`doc/system.md`](doc/system.md) | SunOS in TME |
 | [`doc/boards.md`](doc/boards.md) | The IIsiA7 Mini |
+| [`doc/rd68885.md`](doc/rd68885.md) | RD68885, the MC68882 build |
 | [`doc/manual-contradictions.md`](doc/manual-contradictions.md) | Where the manual disagrees with itself |
 | [`doc/coding-standard.md`](doc/coding-standard.md) | The portable SystemVerilog subset |
 

@@ -277,6 +277,8 @@ The MC68882 build (doc/rd68885.md) adds the conversion unit to the BIU. It adds 
 | `TSRC`, `TDST` | `CU` | The CU's frame word `IMM[2:0]` (doc/model.md): out for FSAVE, in for FRESTORE. Loading word 0 with ones empties the CU |
 | `XFER` | on a response write | The long words of a CA = 0 transfer |
 
+**Stage B** (doc/rd68885.md, R4) needs no microword. The BIU completes the fully concurrent FMOVEs itself, through the register file's second port (`rfb_*`). The sequencer applies their deferred FPSR effects (`dcc`) in hardware in any clock where `RUN` is clear. `CU_READY` stays low for an FMOVE the CU is about to complete.
+
 The paths are `cu_chk`, `cu_take` and the `t_cu`/`t_cufmt` tables, `cu_bsave` and `rest_relatch` in `program.py`, and `cu_rr`/`cu_mem` in `arith_ucode.py`. The MC68882's busy frame (`busy.py`) has the CU's eight long words first and the BIU flags last.
 
 ## The transcendentals (M7)

@@ -30,13 +30,14 @@ IN = ['arch_reset', 'cmd_pend', 'cmd_cond', 'cmd_word', 'opw_valid', 'opw_data',
       'resp_read', 'rsel_read', 'save_read', 'abort',
       # RD68885's conversion unit (doc/rd68885.md)
       'abort_ab', 'cu_ready', 'cu_valid', 'cu_mid', 'cu_word', 'cu_d0', 'cu_d1',
-      'cu_d2', 'cu_w0', 'cu_w1']
+      'cu_d2', 'cu_w0', 'cu_w1',
+      'rfb_we', 'rfb_wa', 'rfb_wd', 'rfb_re', 'rfb_ra', 'dcc_v', 'dcc_cc_v', 'dcc_cc']
 OUT = ['resp_we', 'resp', 'resp_oneshot', 'expect', 'resp_cond', 'cmd_ack',
        'opw_ack', 'opr_we', 'opr', 'rsel_we', 'rsel', 'rsel_dir', 'save_we',
        'save', 'save_xfer', 'restore_we', 'restore', 'restore_xfer', 'fpiar_we',
        'fpiar', 'clear',
        'apu_run', 'pcen', 'resp_xfer', 'cu_take', 'cu_load', 'cu_idx', 'cu_data',
-       'cu_resume', 'relatch', 'relatch_word', 'relatch_cond']
+       'cu_resume', 'relatch', 'relatch_word', 'relatch_cond', 'prec_x', 'dcc_ack']
 # value -> its strobe
 GATED = {'resp': 'resp_we', 'resp_oneshot': 'resp_we', 'expect': 'resp_we',
          'resp_cond': 'resp_we', 'opr': 'opr_we', 'rsel': 'rsel_we',
@@ -77,6 +78,10 @@ def main():
             if rupc != core.upc:
                 print(f'  clock {n}: micro-address RTL {rupc} ISS {where(core.upc)}')
                 return 1
+            # RD68885: the second port's write data is meaningful only with
+            # its strobe (before the first read, the read register is X).
+            if b.get('rfb_we') == 0 and b.get('rfb_wd') is None:
+                b['rfb_wd'] = 0
             if any(v is None for v in b.values()):
                 print(f'  clock {n}: unknown BIU input at {where(core.upc)}: {b}')
                 return 1

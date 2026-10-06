@@ -5,9 +5,10 @@
 
 """Instruction clock counts against FPU section 8 (doc/timing-divergences.md).
 
-    python3 tools/cycles.py gen OUT.S [--only TEXT]
+    python3 tools/cycles.py gen OUT.S [--only TEXT] [--model 68882]
     python3 tools/cycles.py check DUMP DUMP_FAST [--sync DUMP] [--slow DUMP]
                                   [--doc DOC] [--freeze]
+    python3 tools/cycles.py check82 DUMP [--doc DOC] [--freeze]
 
 Adapted from RD68021's tools/cycles.py. `gen` writes a program for
 sim/tb/sys_tb.sv: RD68021 as the MC68020 and RD68884 on a 32-bit port, the
@@ -55,6 +56,7 @@ from fractions import Fraction
 
 FROZEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cycles.frozen')
 FROZEN_SYNC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cycles-sync.frozen')
+FROZEN82 = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cycles-68882.frozen')
 
 RES = 0xC000
 CNT = RES + 0x88
@@ -103,6 +105,55 @@ T82 = {
     'FTWOTOX': (567, 594, 586, 592, 590, 1404),
 }
 T82_OUT = (100, 80, 86, 72, 2002)              # FMOVE to memory: I S D X P
+
+# Table 8-3, MC68882 overall execution times (FPU p. 8-15; checked against the
+# page image): tail and total for FPn to FPm, integer, single, double,
+# extended, packed. The head is the column's (H83), but for FMOVE (T83_FMOVE).
+H83 = (17, 21, 30, 36, 42, 13)
+T83 = {
+    'FABS':    ((17, 38), (28, 68), (20, 51), (20, 57), (20, 63), (811, 893)),
+    'FACOS':   ((607, 628), (618, 658), (610, 641), (610, 647), (610, 653), (1401, 1483)),
+    'FADD':    ((35, 56), (54, 94), (38, 69), (38, 75), (38, 81), (827, 909)),
+    'FASIN':   ((563, 584), (574, 614), (566, 597), (566, 603), (566, 609), (1357, 1439)),
+    'FATAN':   ((385, 406), (396, 436), (388, 419), (388, 425), (388, 431), (1179, 1261)),
+    'FATANH':  ((675, 696), (686, 726), (678, 709), (678, 715), (678, 721), (1469, 1551)),
+    'FCMP':    ((17, 38), (36, 76), (20, 51), (20, 57), (20, 63), (809, 891)),
+    'FCOS':    ((373, 394), (384, 424), (376, 407), (376, 413), (376, 419), (1167, 1249)),
+    'FCOSH':   ((589, 610), (600, 640), (592, 623), (592, 629), (592, 635), (1383, 1465)),
+    'FDIV':    ((87, 108), (106, 146), (90, 121), (90, 127), (90, 133), (879, 961)),
+    'FETOX':   ((479, 500), (490, 530), (482, 513), (482, 519), (482, 525), (1273, 1355)),
+    'FETOXM1': ((527, 548), (538, 578), (530, 561), (530, 567), (530, 573), (1321, 1403)),
+    'FGETEXP': ((27, 48), (38, 78), (30, 61), (30, 67), (30, 73), (821, 903)),
+    'FGETMAN': ((13, 34), (24, 64), (16, 47), (16, 53), (16, 59), (807, 889)),
+    'FINT':    ((37, 58), (48, 88), (40, 71), (40, 77), (40, 83), (831, 913)),
+    'FINTRZ':  ((37, 58), (48, 88), (40, 71), (40, 77), (40, 83), (831, 913)),
+    'FLOGN':   ((507, 528), (518, 558), (510, 541), (510, 547), (510, 553), (1301, 1383)),
+    'FLOGNP1': ((553, 574), (564, 604), (556, 587), (556, 593), (556, 599), (1347, 1429)),
+    'FLOG10':  ((563, 584), (574, 614), (566, 597), (566, 603), (566, 609), (1357, 1439)),
+    'FLOG2':   ((563, 584), (574, 614), (566, 597), (566, 603), (566, 609), (1357, 1439)),
+    'FMOD':    ((54, 75), (73, 113), (57, 88), (57, 94), (57, 100), (846, 928)),
+    'FMUL':    ((55, 76), (74, 114), (58, 89), (58, 95), (58, 101), (847, 929)),
+    'FNEG':    ((17, 38), (28, 68), (20, 51), (20, 57), (20, 63), (811, 893)),
+    'FREM':    ((84, 105), (103, 143), (87, 118), (87, 124), (87, 130), (876, 958)),
+    'FSCALE':  ((25, 46), (44, 84), (28, 59), (28, 65), (28, 71), (817, 899)),
+    'FSGLDIV': ((53, 74), (72, 112), (56, 87), (56, 93), (56, 99), (845, 927)),
+    'FSGLMUL': ((43, 64), (62, 102), (46, 77), (46, 83), (46, 89), (835, 917)),
+    'FSIN':    ((373, 394), (384, 424), (376, 407), (376, 413), (376, 419), (1167, 1249)),
+    'FSINCOS': ((433, 454), (444, 484), (436, 467), (436, 473), (436, 479), (1227, 1309)),
+    'FSINH':   ((669, 690), (680, 720), (672, 703), (672, 709), (672, 715), (1463, 1545)),
+    'FSQRT':   ((89, 110), (100, 140), (92, 123), (92, 129), (92, 135), (883, 965)),
+    'FSUB':    ((35, 56), (54, 94), (38, 69), (38, 75), (38, 81), (827, 909)),
+    'FTAN':    ((455, 476), (466, 506), (458, 489), (458, 495), (458, 501), (1249, 1331)),
+    'FTANH':   ((643, 664), (654, 694), (646, 677), (646, 683), (646, 689), (1437, 1519)),
+    'FTENTOX': ((549, 570), (560, 600), (552, 583), (552, 589), (552, 595), (1343, 1425)),
+    'FTST':    ((15, 36), (26, 66), (18, 49), (18, 55), (18, 61), (809, 891)),
+    'FTWOTOX': ((549, 570), (560, 600), (552, 583), (552, 589), (552, 595), (1343, 1425)),
+}
+# FMOVE to FPn (no conflict; "*": no tail, fully concurrent), to memory,
+# FMOVECR: (H, T, total) per column, None where the table has a dash.
+T83_FMOVE = ((21, 0, 21), (21, 8, 48), (34, 0, 34), (40, 0, 40), (46, 0, 46), (13, 809, 891))
+T83_OUT = ((0, 0, 110), (38, 0, 38), (44, 0, 44), (50, 0, 50), (0, 0, 2006))   # I S D X P
+T83_MOVECR = (10, 0, 32)
 FMTS = ('l', 's', 'd', 'x', 'p')
 FMT_NAME = {'l': 'integer (.L)', 's': 'single', 'd': 'double', 'x': 'extended', 'p': 'packed'}
 EA_AN = 2                                       # Table 8-1, (An), cache case
@@ -192,6 +243,7 @@ IMG = {'l': img_l, 's': img_s, 'd': img_d, 'x': img_x, 'p': img_p}
 # (iss_clocks): FP0/FP1's values, the command word, the effective address
 # (None, ('ind', 0) for A0, ('ind', 1) for A1, ('dn', 0)), A0's data, D0.
 ISS_SPEC = {}
+MAN83 = {}                     # row -> Table 8-3's (H, T, total), EA time added
 FMT_CODE = {'l': 0, 's': 1, 'x': 2, 'p': 3, 'd': 5}       # FPU table 4-12
 OPMODE = dict(FMOVE=0x00, FINT=0x01, FSINH=0x02, FINTRZ=0x03, FSQRT=0x04,
               FLOGNP1=0x06, FETOXM1=0x08, FTANH=0x09, FATAN=0x0A, FASIN=0x0C,
@@ -210,9 +262,20 @@ def cmdw(opclass, rx, ry, ext):
 def arith_rows():
     rows = []
 
-    def row(name, setup, timed, data, man, how, iss):
+    def row(name, setup, timed, data, man, how, iss, man83=None):
         rows.append((name, setup, timed, data, man, how))
         ISS_SPEC[name] = iss
+        if man83 is not None:
+            MAN83[name] = man83
+
+    def m83(op, k, ea=0):
+        """Table 8-3 for column k (0 FPn, then I S D X P), the effective
+        address's time added to the head and the total (note ***)."""
+        if op == 'FMOVE':
+            h, t, tot = T83_FMOVE[k]
+        else:
+            (t, tot), h = T83[op][k], H83[k]
+        return (h + ea, t, tot + ea)
 
     for op, t in T82.items():
         a = ARG.get(op, DEFAULT_ARG)
@@ -232,7 +295,7 @@ def arith_rows():
             mem = lambda f: [f'{m}.{f} (%a0),%fp1']
         rname = {'FTST': 'FTST.X FP0', 'FSINCOS': 'FSINCOS.X FP0,FP2:FP1'}.get(op, f'{op}.X FP0,FP1')
         row(rname, setup, reg, [], t[0], f'{t[0]}',
-            dict(regs=regs, cmd=cmdw(0, 0, ry, OPMODE[op]), ea=None))
+            dict(regs=regs, cmd=cmdw(0, 0, ry, OPMODE[op]), ea=None), m83(op, 0))
         for k, f in enumerate(FMTS):
             if f == 'l' and op in NO_INT:
                 continue
@@ -245,11 +308,12 @@ def arith_rows():
                 name = f'{op}.{f.upper()} (A0),FP1'
             row(name, setup, mem(f), IMG[f](v), t[k + 1] + EA_AN, f'{t[k + 1]} + (An) {EA_AN}',
                 dict(regs=regs, cmd=cmdw(2, FMT_CODE[f], ry, OPMODE[op]), ea=('ind', 0),
-                     data=IMG[f](v)))
+                     data=IMG[f](v)), m83(op, k + 1, EA_AN))
     # Footnote **: an MPU data register as the source, five clocks less.
     row('FADD.L D0,FP1', ['fmove.x ' + lbl_x(Fraction(7, 4)) + ',%fp1', 'moveq #3,%d0'],
         ['fadd.l %d0,%fp1'], [], T82['FADD'][1] - 5, f"{T82['FADD'][1]} - 5",
-        dict(regs=[(1, Fraction(7, 4))], cmd=cmdw(2, 0, 1, OPMODE['FADD']), ea=('dn', 0), d0=3))
+        dict(regs=[(1, Fraction(7, 4))], cmd=cmdw(2, 0, 1, OPMODE['FADD']), ea=('dn', 0), d0=3),
+        (H83[1], T83['FADD'][1][0], T83['FADD'][1][1] - 5))
     # FMOVE to memory, from FP0 = 3.140625 (and to D0: two clocks less).
     pi = Fraction(201, 64)
     setup = [f'fmove.x {lbl_x(pi)},%fp0']
@@ -257,11 +321,13 @@ def arith_rows():
         ins = f'fmove.{f} %fp0,(%a1)' + ('{#17}' if f == 'p' else '')
         row(f'FMOVE.{f.upper()} FP0,(A1)' + (' {#17}' if f == 'p' else ''), setup, [ins], [],
             T82_OUT[k] + EA_AN, f'{T82_OUT[k]} + (An) {EA_AN}',
-            dict(regs=[(0, pi)], cmd=cmdw(3, FMT_CODE[f], 0, 17 if f == 'p' else 0), ea=('ind', 1)))
+            dict(regs=[(0, pi)], cmd=cmdw(3, FMT_CODE[f], 0, 17 if f == 'p' else 0), ea=('ind', 1)),
+            T83_OUT[k][:2] + (T83_OUT[k][2] + EA_AN,))
     row('FMOVE.L FP0,D0', setup, ['fmove.l %fp0,%d0'], [], T82_OUT[0] - 2, f'{T82_OUT[0]} - 2',
-        dict(regs=[(0, pi)], cmd=cmdw(3, 0, 0, 0), ea=('dn', 0)))
+        dict(regs=[(0, pi)], cmd=cmdw(3, 0, 0, 0), ea=('dn', 0)),
+        T83_OUT[0][:2] + (T83_OUT[0][2] - 2,))
     row('FMOVECR #0,FP1', [], ['fmovecr #0,%fp1'], [], 29, '29',
-        dict(regs=[], cmd=cmdw(2, 7, 1, 0), ea=None))
+        dict(regs=[], cmd=cmdw(2, 7, 1, 0), ea=None), T83_MOVECR)
     return rows
 
 
@@ -376,10 +442,29 @@ def all_rows():
 
 # ---- gen ----------------------------------------------------------------------------
 
-def gen(path, only=None):
+def slots(rows, model):
+    """What the program times, in order: each row's total; for the MC68882
+    (RD68885) also, for each row with a Table 8-3 entry, its release (no FNOP
+    after it) and its head (after a long FETOX); and two calibrations."""
+    out = []
+    for i, r in enumerate(rows):
+        out.append((i, 'total'))
+        if model == 68882:
+            if i == 0:
+                out += [(0, 'cal0'), (0, 'long')]
+            elif r[0] in MAN83:
+                out += [(i, 'release'), (i, 'head')]
+    return out
+
+
+LONG = 'fetox.x %fp7'          # FP7 = 2: a long tail, and no row's register
+
+
+def gen(path, only=None, model=68881):
     rows = all_rows()
     if only:
         rows = [r for r in rows if r[0] == 'CALIBRATE' or only in r[0]]
+    two = lbl_x(Fraction(2))
     o = []
     w = o.append
     w('| Generated by tools/cycles.py; do not edit. One row per instruction,')
@@ -407,23 +492,35 @@ def gen(path, only=None):
     w(f'        lea     0x{OUT:X},%a5')
     w('        lea     buf,%a1')
     w('        lea     buf2,%a2')
-    for i, (name, setup, timed, data, _, _) in enumerate(rows):
-        w(f'| {i}: {name}')
+    for i, kind in slots(rows, model):
+        name, setup, timed, data, _, _ = rows[i]
+        if kind == 'cal0':
+            setup, timed = [], []
+        elif kind == 'long':
+            setup, timed = [], [LONG]
+        w(f'| {i}: {name} ({kind})')
         w(f'        lea     d{i},%a0')
         for s in setup:
             if s != NO_FNOP:
                 w(f'        {s}')
+        if kind in ('head', 'long'):
+            w(f'        fmove.x {two},%fp7')
         if NO_FNOP not in setup:
             w('        fnop')
         w('        .balignw 4,0x4E71')           # with NOPs, so no row's count hangs on another's length
         w('        move.l  CNT,%d6')
+        if kind == 'head':
+            w(f'        {LONG}')
         for t in timed:
             w(f'        {t}' if not t.endswith(':') else t)
-        w('        fnop')
+        if kind not in ('release', 'cal0'):
+            w('        fnop')
         w('        move.l  CNT,%d7')
         w('        sub.l   %d6,%d7')
         w('        move.l  %d7,(%a5)+')
-    w(f'        move.l  #{len(rows)},RES+0x14')
+        if kind == 'release':
+            w('        fnop')                    # its tail, outside the count
+    w(f'        move.l  #{len(slots(rows, model))},RES+0x14')
     w('        move.l  #0x444F4E45,RES')
     w('_done:  bra     _done')
     w('h_trapcc:')
@@ -511,6 +608,89 @@ def check(dumps, doc=None, freeze=False):
         return 1
     print('PASS: cycles')
     return 0
+
+
+def measure82(path):
+    """(row, total, release, head) for every row; release and head None
+    where Table 8-3 has nothing."""
+    rows = all_rows()
+    sl = slots(rows, 68882)
+    v = load(path, len(sl))
+    raw = {s_: v[j] for j, s_ in enumerate(sl)}
+    cal, cal0 = raw[(0, 'total')], raw[(0, 'cal0')]
+    lng = raw[(0, 'long')] - cal
+    out = []
+    for i, r in enumerate(rows[1:], 1):
+        tot = raw[(i, 'total')] - cal
+        if r[0] in MAN83:
+            rel = raw[(i, 'release')] - cal0
+            head = lng + tot - (raw[(i, 'head')] - cal)
+            out.append((r, tot, rel, head))
+        else:
+            out.append((r, tot, None, None))
+    return out
+
+
+def check82(path, doc=None, freeze=False):
+    """The MC68882 build (RD68885): each row's total, release and head,
+    against tools/cycles-68882.frozen, and against Table 8-3."""
+    res = measure82(path)
+    keys = []
+    for r, tot, rel, head in res:
+        keys.append((r[0], tot))
+        if rel is not None:
+            keys += [(r[0] + ' [release]', rel), (r[0] + ' [head]', head)]
+    if freeze:
+        with open(FROZEN82, 'w') as f:
+            f.write('# tools/cycles.py --freeze, MODEL=68882: each row\'s total, its release\n'
+                    '# (no FNOP after it) and its head (its overlap after a FETOX), CPU clocks.\n')
+            for k, n in keys:
+                f.write(f'{k}\t{n}\n')
+    fr = load_frozen(FROZEN82)
+    bad = 0
+    for k, n in keys:
+        if fr.get(k) != n:
+            print(f'  FAIL: {k}: {n} clocks, frozen at {fr.get(k)}')
+            bad += 1
+    a = [(r, tot, rel, head) for r, tot, rel, head in res if rel is not None]
+    man = sum(MAN83[r[0]][2] for r, *_ in a)
+    us = sum(tot for _, tot, _, _ in a)
+    mh = sum(MAN83[r[0]][0] for r, *_ in a)
+    uh = sum(head for *_, head in a)
+    print(f'  cycles: MC68882, {len(a)} rows of Table 8-3: {us} clocks where it adds up to {man}; '
+          f'heads {uh} where it adds up to {mh}')
+    if doc:
+        splice82(doc, res)
+    if bad:
+        print(f'FAIL: cycles -- {bad} value(s) moved; look, then make cycles MODEL=68882 FREEZE=1')
+        return 1
+    print('PASS: cycles')
+    return 0
+
+
+def splice82(doc, res):
+    t = ['<!-- cycles82:begin -- generated by tools/cycles.py; do not edit -->',
+         '| Instruction | 8-3 H | T | total | RD68885 head | tail | total | ratio |',
+         '|---|---:|---:|---:|---:|---:|---:|---:|']
+    for r, tot, rel, head in res:
+        if rel is None:
+            continue
+        h, tl, mt = MAN83[r[0]]
+        t.append(f'| `{r[0]}` | {h} | {tl} | {mt} | {head} | {tot - rel} | {tot} | {tot / mt:.2f} |')
+    t.append('<!-- cycles82:end -->')
+    s = splice_between(open(doc).read(), 'cycles82', '\n'.join(t))
+    a = [(r, tot, rel, head) for r, tot, rel, head in res if rel is not None]
+    man = sum(MAN83[r[0]][2] for r, *_ in a)
+    us = sum(tot for _, tot, _, _ in a)
+    mh = sum(MAN83[r[0]][0] for r, *_ in a)
+    uh = sum(head for *_, head in a)
+    mt = sum(MAN83[r[0]][1] for r, *_ in a)
+    ut = sum(tot - rel for _, tot, rel, _ in a)
+    summ = (f'<!-- summary82:begin -->**{len(a)} rows of Table 8-3: totals {us} clocks where '
+            f'the manual adds up to {man} ({100 * (us - man) / man:+.0f} %); heads {uh} '
+            f'against {mh}; tails {ut} against {mt}.**<!-- summary82:end -->')
+    s = splice_between(s, 'summary82', summ)
+    open(doc, 'w').write(s)
 
 
 TRANS = {'FACOS', 'FASIN', 'FATAN', 'FATANH', 'FCOS', 'FCOSH', 'FETOX', 'FETOXM1',
@@ -604,9 +784,15 @@ def splice(doc, res, iss):
 
 
 def main():
-    if len(sys.argv) in (3, 5) and sys.argv[1] == 'gen':
-        gen(sys.argv[2], sys.argv[4] if len(sys.argv) == 5 and sys.argv[3] == '--only' else None)
+    if len(sys.argv) >= 3 and sys.argv[1] == 'gen':
+        a = sys.argv[3:]
+        gen(sys.argv[2], a[a.index('--only') + 1] if '--only' in a else None,
+            int(a[a.index('--model') + 1]) if '--model' in a else 68881)
         return 0
+    if len(sys.argv) >= 3 and sys.argv[1] == 'check82':
+        a = sys.argv[3:]
+        return check82(sys.argv[2], a[a.index('--doc') + 1] if '--doc' in a else None,
+                       '--freeze' in a)
     if len(sys.argv) >= 4 and sys.argv[1] == 'check':
         args = sys.argv[4:]
 
