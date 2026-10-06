@@ -15,12 +15,12 @@ Every instruction of the MC68881 is implemented and every coprocessor dialog wor
 
 **It runs SunOS 4.1.1.** In TME, with RD68021 as the CPU, a C program compiled with `cc -f68881` on the machine gives exactly the console of TME's own MC68881 (`doc/system.md`).
 
-**RD68885, the MC68882 build** (`MODEL=68882`, [`doc/rd68885.md`](doc/rd68885.md)), is on the `rd68885` branch. It identifies itself as an MC68882 and has its instruction overlap:
+**RD68885, the MC68882 build** (`MODEL=68882`, [`doc/rd68885.md`](doc/rd68885.md)), identifies itself as an MC68882 and has its instruction overlap:
 - a conversion unit takes the next instruction while the APU computes;
 - some FMOVEs complete in it entirely (FPU table 5-5);
 - the MC68882's frames, exception rules and dialogs.
 
-It passes every test the MC68881 build passes. SunOS 4.1.1 runs in TME with it, against TME's own MC68882. On the IIsiA7 Mini it meets timing at 71.43 MHz in 17.4% of the slices. The test in a Macintosh is still to come.
+It passes every test the MC68881 build passes. SunOS 4.1.1 runs in TME with it, against TME's own MC68882. On the IIsiA7 Mini it meets timing at 71.43 MHz in 17.4% of the slices, and it works as the FPU of a Macintosh IIsi.
 
 **What it implements:**
 - **The bus:**

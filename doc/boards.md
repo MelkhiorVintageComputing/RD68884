@@ -86,6 +86,7 @@ make board-iisia7 MODEL=68882 BOARD_DIVIDE=14    # 71.43 MHz; writes rd68885_iis
 | Core clock | **71.43 MHz, met.** Worst setup slack +0.071 ns, on the same path as RD68884's (the microword to `A`'s exponent), not the conversion unit's. RD68884 has +0.387 ns at the same clock |
 | Utilisation | 1419 slices (17.4% of the 50T; RD68884 1181, 14.5%), 5101 slice LUTs, 1314 flip-flops, 6 DSPs, 22 block RAMs, 79 I/O |
 | Build directory | `build/iisia7_mini-68882/` |
+| In the IIsi | Works as the machine's FPU |
 
 ### Checked in simulation
 
