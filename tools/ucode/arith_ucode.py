@@ -67,9 +67,17 @@ def emit(p):
     L('src_rr')
     u(RESP='WR', IMM=0x0900, ORS='PC', EXPECT='CMD', RF='READ', RFA='RX', FLAG=run,
       comment='null CA=0: release (PC if exceptions are enabled)')
-    u(SEQ='WAIT', COND='RESP_READ', ASRC='RFQ',
+    # The release must be read before the instruction goes on: the PC
+    # transfer, if asked, follows the read. A save request may come first:
+    # the MPU polled null CA=1 IA=1 while the previous instruction ran, took
+    # an interrupt, and its handler saves before it has read the release.
+    # Then save an idle frame with this instruction pending, as wait_first
+    # does, and FRESTORE starts it again. The wait stays one word, and the
+    # branch to src_norm takes the place of a jump: no clock is added.
+    u(SEQ='WAIT', COND='RESP_SAVE', ASRC='RFQ',
       comment='the PC transfer, if asked, follows the read')
-    u(SEQ='JUMP', TGT='src_norm')
+    u(SEQ='BR', COND='RESP_READ', TGT='src_norm')
+    u(SEQ='JUMP', TGT='save_first', comment='a save request, the release not read')
 
     # ---- the source, <ea>: FPU table 4-14, primitives table 7-5 -----------
     L('src_mem')
@@ -111,7 +119,9 @@ def emit(p):
     u(PSR='FPCR', RMR='FPCR', FPSR='CLREXC', MOP='CLRQ')
     u(RESP='WR', IMM=0x0900, ORS='PC', EXPECT='CMD', FLAG=run, comment='as register to register')
     u(RF='CROM', RFA='CMD', IMM=crom.CR_MOVECR)
-    u(SEQ='WAIT', COND='RESP_READ', ASRC='RFQ', comment='STK <= the constant\'s sticky bit')
+    u(SEQ='WAIT', COND='RESP_SAVE', ASRC='RFQ', comment='STK <= the constant\'s sticky bit')
+    u(SEQ='BR', NEG=1, COND='RESP_READ', TGT='save_first',
+      comment='a save request, the release not read: as register to register')
     L('movecr_go')
     u(SEQ='BR', COND='A_ZERO', TGT='finish')
     u(SEQ='CALL', TGT='post')

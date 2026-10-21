@@ -130,7 +130,7 @@ The microcode's busy frame has its own layout (doc/microcode.md); the frame is o
 | Offset | Contents |
 |---|---|
 | $04 | Command/condition word, then `$FFFF` |
-| $08 | CU: its command word (31–16); bit 15 is 0 if the CU holds an instruction; bit 14 set if it has released the main processor; bit 13 set if its PC was passed; bits 12–8 ones; bits 7–0 the operand long words still to come |
+| $08 | CU: its command word (31–16); bit 15 is 0 if the CU holds an instruction; bit 14 set if it has released the main processor; bit 13 set if its PC was passed; bit 12 set if its current primitive has been read (always, in an idle frame; a busy frame can catch it unread, and FRESTORE then posts it again); bits 11–8 ones; bits 7–0 the operand long words still to come |
 | $0C | CU: the PC passed, or all ones |
 | $10–$1B | CU: the operand long words received, then all ones |
 | $1C–$27 | All ones |

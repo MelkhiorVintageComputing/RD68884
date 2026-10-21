@@ -22,6 +22,9 @@
 |      (FPU 7.2.2), the APU's instruction completes
 |   F  a conditional after overlapped instructions (table 5-6)
 |   G  the fully concurrent FMOVEs (table 5-5), and FPSR in program order
+|   H  an interrupt while a register-to-register instruction is latched
+|      behind a long one, whose handler saves the FPU only once that has
+|      ended and the latched one has posted its release, unread
 |
 |   RES+$00  'DONE'            RES+$04  checks made      RES+$08  checks failed
 |   RES+$0C  first failing check, RES+$10  an unexpected exception's vector
@@ -31,7 +34,7 @@
 
         .equ    STACK_TOP, 0x0000F000
         .equ    RES,       0x0000C000
-        .equ    IRQ,       RES + 0x80
+        .equ    IRQ,       RES + 0x80       | sys_tb: level 2 after N CPU clocks
         .equ    FAULT,     RES + 0x84
         .equ    BUF,       0x0000D000
         .equ    BUF2,      0x0000D100
@@ -43,8 +46,12 @@
         .long   unexpected                  | 3-10
         .endr
         .long   h_fline                     | 11 F-line
-        .rept   36
-        .long   unexpected                  | 12-47
+        .rept   14
+        .long   unexpected                  | 12-25
+        .endr
+        .long   h_irq                       | 26 level 2 autovector
+        .rept   21
+        .long   unexpected                  | 27-47
         .endr
         .rept   7
         .long   h_fp                        | 48-54 floating point
@@ -248,6 +255,43 @@ cmdc:   fadd.s  s_two, %fp3                 | CA = 0, the CU holds it: 11
         bsr     check
 
 | ---------------------------------------------------------------------------
+| H. A register-to-register instruction latched behind FSIN; the main
+| processor, polling null (CA=1, IA=1), takes an interrupt. The handler does
+| other work first, as a scheduler does, so FSIN ends and the latched FMUL
+| posts its release before the FSAVE: that must get a frame (an idle one with
+| the FMUL pending; on an MC68882, a busy one, the CU holding it, its
+| primitive unread), not come-again for ever. Found by Linux on RD68031
+| with RD68884. The interrupt lands at nine delays, to find the window.
+| ---------------------------------------------------------------------------
+        fmove.l #0, %fpcr
+        moveq   #8, %d5
+        move.l  #20, %d4
+7:      fmove.l #2, %fp1
+        fmove.l #3, %fp2
+        fmove.l #5, %fp3
+        fmove.l #7, %fp4
+        fnop
+        clr.l   nirq
+        move.w  #0x2000, %sr                | level 2 allowed
+        move.l  %d4, IRQ
+        fsin.x  %fp1                        | long
+        fadd.x  %fp3, %fp4                  | 12; the MC68882's CU
+        fmul.x  %fp2, %fp3                  | 15: latched, polled
+        fnop
+        move.w  #0x2700, %sr
+        move.l  nirq, %d0
+        moveq   #1, %d1
+        bsr     check                       | the interrupt was taken
+        fmove.l %fp3, %d0
+        moveq   #15, %d1
+        bsr     check
+        fmove.l %fp4, %d0
+        moveq   #12, %d1
+        bsr     check
+        add.l   #12, %d4
+        dbf     %d5, 7b
+
+| ---------------------------------------------------------------------------
 | Done
 | ---------------------------------------------------------------------------
         move.l  #0x444F4E45, RES
@@ -284,6 +328,22 @@ h_fline:
 
 | The bus error: a context switch around the FPU (as fpu_m8.S); RTE runs
 | the faulted access again (UM 7.5.2.8).
+| The interrupt: other work, then a context switch around the FPU.
+h_irq:  addq.l  #1, nirq
+        move.l  %d0, -(%sp)
+        move.w  #200, %d0
+1:      dbf     %d0, 1b
+        move.l  (%sp)+, %d0
+        fsave   -(%sp)
+        fmovem.x %fp0-%fp7, -(%sp)
+        fmovem.l %fpcr/%fpsr/%fpiar, -(%sp)
+        fmove.l #99, %fp0                   | another task's work
+        fmul.x  %fp0, %fp0
+        fmovem.l (%sp)+, %fpcr/%fpsr/%fpiar
+        fmovem.x (%sp)+, %fp0-%fp7
+        frestore (%sp)+
+        rte
+
 h_berr: fsave   -(%sp)
         tst.l   frames
         bne.s   1f
@@ -344,5 +404,6 @@ excpc:  .long   0
 excframe: .long 0
 exccu:  .long   0
 nfline: .long   0
+nirq:   .long   0
 frames: .long   0
 frame0: .long   0

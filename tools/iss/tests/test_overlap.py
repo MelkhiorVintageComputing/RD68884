@@ -82,6 +82,51 @@ class Dialogs(unittest.TestCase):
         self.assertEqual(self.fpu.fp_bits80(2), F.encode_x(fin(0, 5, 0)).bits80())
 
 
+    def test_interrupt_before_the_cu_store_is_read(self):
+        """FMOVE.X out taken by the CU while FSIN computes (table 5-5): the
+        main processor reads the null (CA=1, IA=1) before the CU has posted
+        its evaluate <ea> ($320C, figure 7-21), and takes an interrupt. The
+        handler's FSAVE saves the CU with that primitive unread, in a busy
+        frame; after FRESTORE it must be there again, and the store must
+        complete. (The CU posts it within a few clocks: the read is made
+        with no bus delay, to land before.)"""
+        def run(interrupt):
+            fpu = Machine(model=68882)
+            m = MPU(fpu)
+            m.a[0] = 0x4000
+            m.fgen(cmd(2, F.FMT_X, 1, OP['FMOVE']), ('imm', x96(fin(0, 3, 0)), 12))
+            m.fgen(cmd(2, F.FMT_X, 4, OP['FMOVE']), ('imm', x96(fin(1, 11, -3)), 12))
+            fpu.tick(300)
+            m.fgen(cmd(0, 1, 2, OP['FSIN']))
+            store = cmd(3, F.FMT_X, 4, 0)                      # FMOVE.X FP4,(A0)
+            fpu.write(C.CIR_COMMAND, store)
+            if interrupt:
+                fpu.BUS_CLOCKS = 0
+                self.assertEqual(fpu.read(C.CIR_RESPONSE), C.P_WAIT)
+                fpu.BUS_CLOCKS = Machine.BUS_CLOCKS
+                fpu.tick(20000)                                 # FSIN ends; $320C posted
+                h = MPU(fpu, m.mem)
+                h.a[7] = 0x8000
+                polls = []
+
+                def bounded(_):
+                    polls.append(1)
+                    self.assertLess(len(polls), 1000, 'FSAVE: come-again forever')
+                h.poll_hook = bounded
+                self.assertEqual(h.fsave(('predec', 7)), C.FW82_BUSY)
+                h.frestore(('postinc', 7))
+            polls = []
+
+            def bounded_main(_):
+                polls.append(1)
+                self.assertLess(len(polls), 5000, 'the store: null for ever')
+            m.poll_hook = bounded_main
+            m.resume(('ind', 0))                                # RTE: read the response again
+            m.fcond(0)
+            return m.mem.read(0x4000, 12), [fpu.fp_bits80(i) for i in (1, 2, 4)]
+        self.assertEqual(run(True), run(False))
+
+
 class VsModel(unittest.TestCase):
     """Programs on the golden model and on the microcode."""
 

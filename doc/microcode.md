@@ -66,6 +66,8 @@ Each of these was found by the differential tests. Each needs the BIU, because n
 | RD68885: the MPU reads a primitive asking for the PC in the clock the microcode rewrites the response, which masks the read event | The PC is expected from the value read, not from the event. Found by `fpu_m10` |
 | RD68885: the microcode posts its next primitive before the MPU has written the PC | While a PC is owed, a response write sets what is expected after the PC. Found by `fpu_m10` |
 | RD68885: the microcode's end-of-instruction write lands while the BIU is in the CU's dialog, or owed a PC | `RESP=WRC` also stands aside for these |
+| A register-to-register instruction or FMOVECR waits for its release to be read, and the MPU takes an interrupt instead. It was polling null (CA=1, IA=1) while the previous instruction ran, and the handler saves the FPU only after the latched instruction has posted its release. The wait ignored save requests, so FSAVE answered come-again for ever | The wait also ends on a save request (`RESP_SAVE`), which saves an idle frame with the instruction pending, as `wait_first` does. The wait stays one word and its exit replaces a jump, so it costs no clock (FMOVECR, one). Found by Linux on RD68031 with RD68884, and in `fpu_m10` section H |
+| RD68885: the same interrupt, with the CU taking the latched instruction from the latch while the MPU is in the handler. Its first primitive is posted and unread when FSAVE saves the CU in a busy frame; after FRESTORE the CU was resumed as if it had been read, and the MPU polled `$8900` for ever. Likewise an extended store's `$320C` | The CU remembers whether its current primitive has been read (`cu_prd`, bit 12 of its frame word); `CU_RESUME` posts an unread one again. Found by `fpu_m10` section H and `test_vs_model` |
 | RD68885: the MPU reads the CU's first primitive in the clock of that end-of-instruction write. A write masks the read event, so the CU never saw its primitive read | Only a write that takes effect masks it; one that stands aside does not. Found by `fparith` |
 
 ## The value format
@@ -271,6 +273,7 @@ The MC68882 build (doc/rd68885.md) adds the conversion unit to the BIU. It adds 
 | `COND` | `CU_READY` | The CU's instruction can go to the APU: its operand is in, its PC (if asked) written, and it is released or a B, W or L source |
 | `COND` | `CU_VALID`, `CU_MID` | The CU holds an instruction; its dialog is not over |
 | `COND` | `PCODE` | The pending code is set. FSAVE saves an unread take-exception primitive's instruction as pending (both builds) |
+| `COND` | `RESP_SAVE` | `RESP_READ` or `SAVE_REQ` (both builds). A register-to-register instruction and FMOVECR wait on it for their release to be read. If a save request comes first, they save an idle frame with themselves pending (`save_first`) |
 | `BIU` | `CU_TAKE` | `CMD` and `XI` from the CU, its PC to FPIAR; a B, W or L source is released (`$0900`) |
 | `BIU` | `CU_RESUME` | After FRESTORE of a busy frame: the CU's dialog's response and expectation again |
 | `BIU` | `RELATCH` | `CMD` back into the command latch, with `$8900` |

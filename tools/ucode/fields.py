@@ -53,7 +53,9 @@ FIELDS = [
               # the APU; holds one; holds one whose dialog is not over
               'CU_READY', 'CU_VALID', 'CU_MID',
               # the pending code (FLAG PEND_CMD/PEND_NONE) is set
-              'PCODE']),
+              'PCODE',
+              # RESP_READ or SAVE_REQ: a release's wait that a save ends too
+              'RESP_SAVE']),
     ('IDX', ['OPCLASS', 'RX', 'OPMODE']),
     ('TGT', UADDR_BITS),
     ('IMM', 16),

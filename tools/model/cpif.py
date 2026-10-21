@@ -1046,8 +1046,10 @@ class FPU882(FPU881):
 
             +0  command word (31-16); bit 15: 0 if the CU holds an
                 instruction; bit 14: the MPU has been released; bit 13:
-                its PC was passed; bits 12-8 ones; bits 7-0: operand long
-                words still to come
+                its PC was passed; bit 12: its current primitive has been
+                read (always here: the ISS and RTL can save it unread in a
+                busy frame); bits 11-8 ones; bits 7-0: operand long words
+                still to come
             +4  the PC passed, or ones
             +8  the operand long words received, ones after them
             +20 ones

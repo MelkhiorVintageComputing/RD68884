@@ -371,6 +371,7 @@ class Core:
                 'Q_ODD': self.c & 1, 'A_POW2': a.mant == 1 << 71,
                 'CU_READY': b.get('cu_ready', 0), 'CU_VALID': b.get('cu_valid', 0),
                 'CU_MID': b.get('cu_mid', 0), 'PCODE': self.pcode,
+                'RESP_SAVE': ev_resp | b['save_req'],
             }[cond_name]
         cond = int(bool(cond)) ^ F('NEG')
 

@@ -179,6 +179,10 @@ class Biu:
         # Stage B: which fully concurrent FMOVE it is; the APU path chosen
         # instead (Table 5-5 (b)); FPm read; an extended store's operand out.
         self.cu_fm, self.cu_nofm, self.cu_rd, self.cu_xrd = FM_NONE, 0, 0, 0
+        # Its current primitive has been read: a busy frame can catch it
+        # before (an interrupt taken while the main processor polled), and
+        # FRESTORE must then post it again (CU_RESUME).
+        self.cu_prd = 1
 
     # ---------------------------------------------------- the core's view
     def cu_dlg(self):
@@ -264,7 +268,7 @@ class Biu:
             self.cu_clear()
         if 'xout' in d:
             # Figure 7-21: evaluate <ea> and transfer data, CA = 0.
-            self.cu_d, self.cu_cnt, self.cu_xrd = d['xout'], 3, 1
+            self.cu_d, self.cu_cnt, self.cu_xrd, self.cu_prd = d['xout'], 3, 1, 0
             self.resp, self.oneshot = 0x320C, 1
             self.expect, self.expect_next = EXP_RESP, EXP_OPR
 
@@ -272,7 +276,8 @@ class Biu:
         """The CU's eight long words in a frame (doc/model.md, FPU882)."""
         if not self.cu_v:
             return [ONES] * 8
-        w0 = (self.cu_word << 16) | (self.cu_rel << 14) | (self.cu_pcv << 13) | 0x1F00 | self.cu_cnt
+        w0 = (self.cu_word << 16) | (self.cu_rel << 14) | (self.cu_pcv << 13) | \
+            (self.cu_prd << 12) | 0x0F00 | self.cu_cnt
         return [w0, self.cu_pc if self.cu_pcv else ONES] + list(self.cu_d) + [ONES] * 3
 
     def outputs(self):
@@ -363,13 +368,22 @@ class Biu:
         if o.get('cu_load'):
             self._cu_load(o['cu_idx'], o['cu_data'])
         if o.get('cu_resume'):
-            # After FRESTORE of a busy frame: the CU's dialog as it was.
-            if self.cu_cnt:
+            # After FRESTORE of a busy frame: the CU's dialog as it was. A
+            # primitive the main processor had not read is posted again.
+            if not self.cu_prd:
+                if self.cu_xrd:
+                    self.resp, self.expect_next = 0x320C, EXP_OPR
+                else:
+                    self.resp = cu_first(self.cu_word, self.pcen)[0]
+                    self.expect_next = EXP_OPW if self.cu_cnt else EXP_CMD
+                self.oneshot, self.expect = 1, EXP_RESP
+            elif self.cu_cnt:
                 self.resp = 0x8900 if self.cu_bwl else 0x0900
                 self.expect = EXP_OPR if self.cu_xrd else EXP_OPW
             else:
                 self.resp, self.expect = 0x8900, EXP_RESP
-            self.oneshot = 0
+            if self.cu_prd:
+                self.oneshot = 0
         if o.get('relatch'):
             # After FRESTORE, a pending instruction goes back to the latch,
             # behind an instruction the frame left in the CU.
@@ -392,6 +406,7 @@ class Biu:
                 return
             self.cu_v, self.cu_word = 1, v >> 16
             self.cu_rel, self.cu_pcv, self.cu_cnt = v >> 14 & 1, v >> 13 & 1, v & 0xFF
+            self.cu_prd = v >> 12 & 1
             rx = self.cu_word >> 10 & 7
             self.cu_bwl = int(self.cu_word >> 13 & 7 == 2 and rx in (0, 4, 6))
             self.cu_fm, self.cu_nofm, self.cu_rd = fm_kind(self.cu_word), 0, 0
@@ -409,7 +424,7 @@ class Biu:
             self.resp, self.oneshot, self.expect = 0x8900, 0, EXP_RESP
             return
         prim, n = cu_first(word, self.pcen)
-        self.cu_v, self.cu_word, self.cu_cnt = 1, word, n
+        self.cu_v, self.cu_word, self.cu_cnt, self.cu_prd = 1, word, n, 0
         self.cu_fm = fm_kind(word)
         rx = word >> 10 & 7
         self.cu_bwl = int(word >> 13 & 7 == 2 and rx in (0, 4, 6))
@@ -564,7 +579,10 @@ class Biu:
                 # The CU's first primitive: $0900 after an S, D or X request
                 # (figure 7-19), $8900 after a B, W or L one; released at
                 # once if register to register (figure 7-17).
-                if self.cu_cnt == 0:
+                self.cu_prd = 1
+                if self.cu_xrd:
+                    self.resp = 0x0900          # the extended store's $320C
+                elif self.cu_cnt == 0:
                     self.cu_rel = 1
                 else:
                     self.resp = 0x8900 if self.cu_bwl else 0x0900

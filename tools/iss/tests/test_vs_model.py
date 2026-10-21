@@ -254,6 +254,65 @@ class IssOnly(unittest.TestCase):
         self.assertEqual(fpu.fp_bits80(1), F.encode_x(fin(0, 42, 0)).bits80())
         self.assertEqual(fpu.fp_bits80(6), F.encode_x(fin(0, 77, 0)).bits80())
 
+    def test_interrupt_while_latched_behind_computation(self):
+        """A register-to-register instruction latched while the one before it
+        computes: the MPU polls null CA=1 IA=1 and takes an interrupt. The
+        computation ends, the latched instruction starts and posts its release,
+        and the handler's FSAVE comes before the MPU has read it. FSAVE must
+        get a frame, not come-again forever (an idle frame, the instruction
+        pending, as when it waits for its first primitive). Both paths that
+        release before they start: register to register, and FMOVECR.
+
+        The MC68882 build too, where the conversion unit takes the
+        instruction after the FSIN: an FADD fills it first, so that the
+        third is the latched one. Its frame may then be idle or busy (the CU
+        takes the latched instruction as soon as it is free, doc/rd68885.md);
+        what matters is that FSAVE answers, and the result."""
+        def run(interrupt, latched, model):
+            fpu = Machine(model=model)
+            m = MPU(fpu)
+            done = []
+
+            def handler(mpu):
+                if done or not interrupt:
+                    return
+                done.append(1)
+                fpu.tick(20000)         # the FSIN ends, the latched one starts
+                h = MPU(fpu, m.mem)
+                h.a[7] = 0x8000
+                polls = []
+
+                def bounded(_):
+                    polls.append(1)
+                    self.assertLess(len(polls), 1000, 'FSAVE: come-again forever')
+                h.poll_hook = bounded
+                fw = h.fsave(('predec', 7))
+                if model == 68881:
+                    self.assertEqual(fw, C.FW_IDLE)
+                    flags = h.mem.read(h.a[7] + 0x18, 4)
+                    self.assertEqual(flags >> 28 & 7, C.PEND_GEN)
+                else:
+                    self.assertIn(fw, (C.FW82_IDLE, C.FW82_BUSY))
+                h.fgen(cmd(2, FMT_X, 6, 0), ('imm', x96(fin(0, 77, 0)), 12))
+                h.fcond(0)      # FNOP: FRESTORE aborts a running instruction (FPU 7.2.4)
+                h.frestore(('postinc', 7))
+            m.fgen(cmd(2, FMT_X, 1, 0), ('imm', x96(fin(0, 3, 0)), 12))
+            m.fgen(cmd(2, FMT_X, 3, 0), ('imm', x96(fin(0, 5, 0)), 12))
+            m.fgen(cmd(0, 1, 2, 0x0E))  # FSIN FP1, FP2: released, computes
+            if model == 68882:
+                m.fgen(cmd(0, 3, 4, 0x22))  # FADD FP3, FP4: the CU's
+            m.poll_hook = handler       # the latched one's polls, not the loads'
+            m.fgen(latched)             # latched behind it
+            m.fcond(0)                  # FNOP: waits for it
+            if interrupt:
+                self.assertTrue(done, 'the handler never ran')
+            return [fpu.fp_bits80(i) for i in (1, 2, 3, 4)]
+        for model in (68881, 68882):
+            for latched in (cmd(0, 2, 3, 0x23),        # FMUL FP2, FP3
+                            cmd(2, 7, 3, 0x00)):       # FMOVECR #pi, FP3
+                with self.subTest(model=model, latched=hex(latched)):
+                    self.assertEqual(run(True, latched, model), run(False, latched, model))
+
     def test_save_during_computation_waits(self):
         fpu = Machine()
         m = MPU(fpu)
