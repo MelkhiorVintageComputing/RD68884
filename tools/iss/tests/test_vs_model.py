@@ -313,6 +313,55 @@ class IssOnly(unittest.TestCase):
                 with self.subTest(model=model, latched=hex(latched)):
                     self.assertEqual(run(True, latched, model), run(False, latched, model))
 
+    def test_interrupt_before_condition_read(self):
+        """An FBcc latched while the instruction before it computes: the MPU
+        polls null CA=1 IA=1 and takes an interrupt. The computation ends and
+        the conditional is answered (null CA=0 with TF) before the handler's
+        FSAVE, which comes before the MPU has read that answer. The frame must
+        keep the conditional pending, and FRESTORE evaluate it again; saved as
+        done, the MPU resumed to TF = 0 (NetBSD's libm on RD68031: log's fbgt,
+        fmod's fbne). Also with FSAVE coming while it is still latched, and
+        with a kernel thread's null frame restored and saved in between."""
+        def run(interrupt, pred, delay, hop, model):
+            fpu = Machine(model=model)
+            m = MPU(fpu)
+            done = []
+
+            def handler(mpu):
+                if done or not interrupt:
+                    return
+                done.append(1)
+                fpu.tick(delay)
+                h = MPU(fpu, m.mem)
+                h.a[7] = 0x8000
+                h.fsave(('predec', 7))
+                h.fgen((7 << 13) | (0 << 11) | 0xFF, ('predec', 7))
+                h.fgen(cmd(5, 7, 0, 0), ('predec', 7))
+                if hop:
+                    h.mem.write(0x9000, 4, 0)
+                    k = MPU(fpu, h.mem)
+                    k.a[7] = 0x9000
+                    k.frestore(('postinc', 7))
+                    k.a[7] = 0x9100
+                    k.fsave(('predec', 7))
+                h.fgen(cmd(4, 7, 0, 0), ('postinc', 7))
+                h.fgen((6 << 13) | (2 << 11) | 0xFF, ('postinc', 7))
+                h.frestore(('postinc', 7))
+            m.fgen(cmd(2, FMT_X, 0, 0), ('imm', x96(fin(0, 3, 0)), 12))
+            m.fgen(cmd(0, 0, 1, 0x0E))  # FSIN FP0, FP1: released, computes
+            m.poll_hook = handler
+            tf = m.fcond(pred)          # latched behind it, polled
+            if interrupt:
+                self.assertTrue(done, 'the handler never ran')
+            return tf
+        for model in (68881, 68882):
+            for pred in (0x0E, 0x12, 0x0F, 0x01):      # NE, GT, T: true; EQ: false
+                for delay in (0, 3000):
+                    for hop in (0, 1):
+                        with self.subTest(model=model, pred=hex(pred), delay=delay, hop=hop):
+                            self.assertEqual(run(True, pred, delay, hop, model),
+                                             run(False, pred, delay, hop, model))
+
     def test_save_during_computation_waits(self):
         fpu = Machine()
         m = MPU(fpu)

@@ -25,6 +25,8 @@
 |   H  an interrupt while a register-to-register instruction is latched
 |      behind a long one, whose handler saves the FPU only once that has
 |      ended and the latched one has posted its release, unread
+|   I  the same with an FBcc: its answer (null CA=0 with TF) posted and
+|      unread at the FSAVE; after FRESTORE the branch must still be taken
 |
 |   RES+$00  'DONE'            RES+$04  checks made      RES+$08  checks failed
 |   RES+$0C  first failing check, RES+$10  an unexpected exception's vector
@@ -292,6 +294,31 @@ cmdc:   fadd.s  s_two, %fp3                 | CA = 0, the CU holds it: 11
         dbf     %d5, 7b
 
 | ---------------------------------------------------------------------------
+| I. An interrupt while an FBcc is latched behind a long instruction
+| ---------------------------------------------------------------------------
+        moveq   #8, %d5
+        move.l  #20, %d4
+8:      fmove.l #2, %fp1
+        fnop
+        clr.l   nirq
+        clr.l   nottaken
+        move.w  #0x2000, %sr                | level 2 allowed
+        move.l  %d4, IRQ
+        fsin.x  %fp1                        | long: sin 2 > 0
+        fbgt    9f                          | latched, polled; true
+        addq.l  #1, nottaken
+9:      fnop
+        move.w  #0x2700, %sr
+        move.l  nirq, %d0
+        moveq   #1, %d1
+        bsr     check                       | the interrupt was taken
+        move.l  nottaken, %d0
+        moveq   #0, %d1
+        bsr     check                       | and the branch too
+        add.l   #12, %d4
+        dbf     %d5, 8b
+
+| ---------------------------------------------------------------------------
 | Done
 | ---------------------------------------------------------------------------
         move.l  #0x444F4E45, RES
@@ -405,5 +432,6 @@ excframe: .long 0
 exccu:  .long   0
 nfline: .long   0
 nirq:   .long   0
+nottaken: .long 0
 frames: .long   0
 frame0: .long   0

@@ -244,7 +244,14 @@ def build(model=68881):
     u(RESP='WR', IMM=0x5C30, EXPECT='CMD' if model == 68882 else 'RESP', SEQ='JUMP',
       TGT='idle', FLAG='PEND_CMD', comment='take BSUN, with the PC')
     L('cond_eval')
-    u(RESP='WR', IMM=0x0800, ORS='TF', EXPECT='CMD', SEQ='JUMP', TGT='idle', comment='null CA=0 TF')
+    # The answer carries TF: until it is read, the conditional is pending, as
+    # BSUN's primitive is. A save before the read (the MPU polled null CA=1
+    # IA=1 while the previous instruction ran, took an interrupt, and its
+    # handler saves) keeps it, and FRESTORE evaluates it again, against the
+    # FPSR restored before it. Saved as done, the response would be cleared
+    # and the MPU would resume to TF = 0.
+    u(RESP='WR', IMM=0x0800, ORS='TF', EXPECT='CMD', SEQ='JUMP', TGT='idle', FLAG='PEND_CMD',
+      comment='null CA=0 TF; pending until read')
 
     # =========================================================================
     # FSAVE. FPU 6.4.3, 7.5.3.1; frame figure 6-4 (doc/model.md).

@@ -108,6 +108,7 @@ class FPU881:
         self.on_done = None          # what to do when they run out
         self.exc_pend = False
         self.pv = False
+        self.cond_unread = None      # a conditional answered, its answer not read
         self.etemp = Reg(0, 0, 0)
         self.opreg = 0xFFFFFFFF
         self.frame = None            # FSAVE/FRESTORE transfer in progress
@@ -186,6 +187,7 @@ class FPU881:
     def _abort(self):
         """FPU 7.2.2: any control write terminates the instruction, clears
         pending exceptions and returns the BIU to idle."""
+        self.cond_unread = None
         self.dialog = None
         self.latched = None
         self.busy = 0
@@ -216,6 +218,7 @@ class FPU881:
     def _begin(self, kind, word):
         """The instruction's first primitive, FPU 7.5 and 6.4.2.2 (EXC PEND)."""
         self.latched = None
+        self.cond_unread = None
         reports = kind == 'cond' or (word >> 13) in (0, 2, 3)
         if self.exc_pend and reports:
             vec = A.trap_vector((self.st.fpsr >> 8) & 0xFF, self.st.enable) or 49
@@ -246,6 +249,9 @@ class FPU881:
         prim = P_TRUE if tf else P_FALSE
         self.dialog = None
         self.resp = prim
+        # Until the answer is read, FSAVE saves the conditional as pending
+        # and FRESTORE evaluates it again (MODEL CHOICE, doc/model.md).
+        self.cond_unread = pred
 
     def _begin_gen(self, cmd):
         opclass = (cmd >> 13) & 7
@@ -386,6 +392,8 @@ class FPU881:
     def _read_response(self):
         r = self.resp
         d = self.dialog
+        if not self.pv:
+            self.cond_unread = None
         if self.pv or d is None or d.released:
             return r
         step = d.steps[d.pc]
@@ -540,6 +548,8 @@ class FPU881:
         if self.busy:
             return FW_AGAIN                        # end/middle phase: come again
         d = self.dialog
+        if d is None and self.cond_unread is not None:
+            d = Dialog('cond', self.cond_unread)    # its answer not read: pending
         # A dialog whose first primitive has not been read has transferred
         # nothing: the idle frame's pending-instruction code can restart it.
         fresh = d is not None and d.pc == d.first_prim()
@@ -594,6 +604,7 @@ class FPU881:
         self.frame = None
         self.dialog = None
         self.latched = None
+        self.cond_unread = None
         self.exc_pend = False
         self.pv = False
         self.resp = P_IDLE
@@ -973,6 +984,7 @@ class FPU882(FPU881):
         r = self.resp
         if self.pv:
             return r
+        self.cond_unread = None
         if self._is_take(self.dialog) and r == self.dialog.steps[0][1]:
             self.dialog.read = True
         d = self._bd()
@@ -1032,6 +1044,8 @@ class FPU882(FPU881):
         d = self.dialog
         if self._is_take(d) and d.read:
             d = None
+        if d is None and self.cond_unread is not None:
+            d = Dialog('cond', self.cond_unread)    # its answer not read: pending
         cu_mid = self.cu is not None and not self.cu.released
         fresh = d is not None and d.pc == d.first_prim()
         if not self.pv and (cu_mid or (d is not None and not fresh)):

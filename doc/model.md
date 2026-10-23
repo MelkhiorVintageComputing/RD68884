@@ -75,7 +75,7 @@ These are places where the manual is silent or contradicts itself. Each is marke
 
 In the BIU flags:
 - Bit 27 is EXC PEND, active low.
-- The pending code is 111 (nothing), 011 (a general instruction whose first primitive has not been read) or 001 (the same for a conditional).
+- The pending code is 111 (nothing), 011 (a general instruction whose first primitive has not been read) or 001 (the same for a conditional, or a conditional whose answer, null CA=0 with TF, has not been read: MODEL CHOICE, so that FRESTORE evaluates it again rather than the main processor resuming to TF = 0).
 - The MC68882-only fields are written as zeros, and bits 15–0 as ones.
 
 On FRESTORE, a pending instruction is restarted from its command word, so the main processor's next response read finds its first primitive again.
