@@ -98,8 +98,9 @@ def emit(p):
                 bwait(p, 'OPW_VALID', False,
                       [dict(RESP='WR', IMM=0x8900, EXPECT='OPW', XFER=nl - k)])
                 u(BIU='OPW_ACK', TSRC='OPW', TDST=f'XI{k}')
-            u(RESP='WRC', IMM=0x0900, EXPECT='CMD', ASRC=unpack, SEQ='JUMP', TGT='src_norm',
-              comment='released already; not over the CU\'s dialog')
+            u(RESP='WRC', IMM=0x0900, EXPECT='CMD', ASRC=unpack, PSR='FPCR', RMR='FPCR',
+              SEQ='JUMP', TGT='src_norm',
+              comment='released already; not over the CU\'s dialog. FPCR again: see below')
             continue
         u(RESP='WR', IMM=prim, ORS='PC', ONESHOT=1, EXPECT='OPW',
           comment='evaluate <ea> and transfer data')
@@ -107,12 +108,16 @@ def emit(p):
         for k in range(nl):
             bwait(p, 'OPW_VALID', False, opw_replay())
             u(BIU='OPW_ACK', TSRC='OPW', TDST=f'XI{k}')
+        # The rounding precision and mode are taken from FPCR again once the
+        # operand is in: a busy frame taken during the transfer does not hold
+        # them, and the work run before FRESTORE may have latched its own.
+        # FPCR itself is the task's again by then (restored before FRESTORE).
         if unpack is None:
-            u(RESP='WR', IMM=0x0900, EXPECT='CMD', FLAG=run, SEQ='JUMP', TGT='pin',
-              comment='release')
+            u(RESP='WR', IMM=0x0900, EXPECT='CMD', PSR='FPCR', RMR='FPCR', FLAG=run,
+              SEQ='JUMP', TGT='pin', comment='release')
         else:
-            u(RESP='WR', IMM=0x0900, EXPECT='CMD', ASRC=unpack, FLAG=run, SEQ='JUMP',
-              TGT='src_norm', comment='release')
+            u(RESP='WR', IMM=0x0900, EXPECT='CMD', ASRC=unpack, PSR='FPCR', RMR='FPCR',
+              FLAG=run, SEQ='JUMP', TGT='src_norm', comment='release')
 
     # ---- FMOVECR, FPU 4.6: the constant, rounded as any result ----------
     L('movecr')
@@ -735,7 +740,8 @@ def emit(p):
       PSR='X', RMR='FPCR', FPSR='CLREXC', MOP='CLRQ', comment='transfer Dn')
     u(SEQ='CALL', TGT='wait_first')
     bwait(p, 'OPW_VALID', False, opw_replay())
-    u(BIU='OPW_ACK', TSRC='OPW', TDST='MASK', RF='READ', RFA='RY', comment='the k-factor')
+    u(BIU='OPW_ACK', TSRC='OPW', TDST='MASK', RF='READ', RFA='RY', PSR='X', RMR='FPCR',
+      comment='the k-factor; FPCR again, as after an operand (src_mem)')
     u(ASRC='RFQ', SEQ='JUMP', TGT='o_p_go')
 
     # ---- extended: exact, a denormal signals UNFL --------------------------

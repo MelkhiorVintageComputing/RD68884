@@ -250,7 +250,9 @@ on:
 - **Usually** `$8900`, with the expectation the transfer had: operand writes, or operand reads with the operand register written again.
 - **FMOVE out's first wait** may be interrupted before its primitive was read. Its stub then looks at the `RESP_READ` event and writes the primitive itself again.
 
-At any wait only `XI`, `MASK`, `RN`, the command word and the flags are live. Every computation has finished, or not yet started. FSAVE during a computation is answered come-again by the BIU until the microcode reaches a wait, or finishes and saves an idle frame.
+At any wait only `XI`, `MASK`, `RN`, the command word and the flags are live. Every computation has finished, or not yet started.
+
+The rounding precision and mode (`PSR`, `RMR`) are not in the frame. An instruction latches them from FPCR when it starts, before its operand comes in, and the work run between FSAVE and FRESTORE may latch its own. So they are latched from FPCR again once the operand is in: in the release that follows the last long word, and after FMOVE.P's dynamic k-factor. By then FPCR is the interrupted task's again, restored before FRESTORE. Found with `test_busy`'s `test_mid_transfer_keeps_rounding`: an FDIV.D stopped by a bus error between its long words, whose handler's work rounds toward zero. FSAVE during a computation is answered come-again by the BIU until the microcode reaches a wait, or finishes and saves an idle frame.
 
 A protocol violation pending makes an idle frame, as the model has it.
 

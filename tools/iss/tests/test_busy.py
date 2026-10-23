@@ -134,6 +134,27 @@ class Busy(unittest.TestCase):
             return p, fw, prim(fpu)
         self.assertEqual(self.both(s)[1], C.FW_BUSY)
 
+    def test_mid_transfer_keeps_rounding(self):
+        """The kernel's other work rounds toward zero; the interrupted FDIV
+        must still round as its own FPCR says (to nearest): 1/3 differs in
+        the last bit."""
+        three = longs(F.encode_d(fin(0, 3, 0)), 2)
+
+        def rz_work(k):
+            k.fgen(cmd(4, 4, 0, 0), ('imm', 0x10, 4))               # FPCR: RZ
+            k.fgen(cmd(2, F.FMT_L, 3, 0x22), ('imm', 1, 4))         # FP3 += 1
+            k.fgen(cmd(4, 4, 0, 0), ('imm', 0, 4))
+
+        def s(fpu):
+            MPU(fpu).fgen(cmd(2, F.FMT_L, 1, 0), ('imm', 1, 4))      # FP1 = 1
+            fpu.write(C.CIR_COMMAND, cmd(2, F.FMT_D, 1, 0x20))      # FDIV.D <ea>,FP1
+            p = prim(fpu)
+            fpu.write(C.CIR_OPERAND, three[0])
+            fw = kernel(fpu, rz_work)
+            fpu.write(C.CIR_OPERAND, three[1])
+            return p, fw, prim(fpu)
+        self.assertEqual(self.both(s)[1], C.FW_BUSY)
+
     def test_mid_fmove_x_out(self):
         def s(fpu):
             m = MPU(fpu)
